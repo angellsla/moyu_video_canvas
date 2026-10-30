@@ -208,7 +208,7 @@ jobs:
         env:
           BEEFTV_SKIP_LOCAL_VERIFY: "1"
           BEEFTV_WAILS_PLATFORM: ${{ matrix.wails_platform }}
-        run: ./scripts/build-beeftv-release.sh
+        run: bash scripts/build-beeftv-release.sh
 
       - name: Build Windows desktop
         if: runner.os == 'Windows'
