@@ -1,34 +1,11 @@
 package app
 
 import (
-	"context"
 	"fmt"
 	"slices"
 	"strings"
 	"testing"
 )
-
-func TestSourcedSeedanceGenerationKeepsServerLimitsAndAudio(t *testing.T) {
-	version := "gateway-version"
-	profile := DefaultModelCapabilityConfigForModel("newapi", "seedance-2.0")
-	profile.Video.References.MaxImages = 12
-	profile.Video.GenerateAudio.Supported = false
-	input := canvasGenerationInput{Mode: "video", Prompt: "test", Config: providerConfig{InterfaceType: "newapi", BaseURL: "https://enterprise.beefapi.com", Model: "seedance-2.0", VideoSeconds: "5", Size: "16:9", VQuality: "720p", CapabilityConfig: profile, VideoCapabilitiesVersion: &version}}
-	for i := 0; i < 10; i++ {
-		input.ReferenceImages = append(input.ReferenceImages, providerMedia{URL: "asset://test", Width: 640, Height: 640, Bytes: 10})
-	}
-	if err := (&Service{}).validateResolvedVideoCapability(&input); err != nil {
-		t.Fatal(err)
-	}
-	if input.VideoCapability.GenerateAudio.Supported {
-		t.Fatal("catalog audio false was restored by legacy repair")
-	}
-	input.Config.VideoCapabilitiesVersion = nil
-	restoreBeefAPISeedanceAudioControl(context.Background(), input.Config, input.VideoCapability)
-	if !input.VideoCapability.GenerateAudio.Supported {
-		t.Fatal("legacy saved profiles should retain the audio repair")
-	}
-}
 
 func TestNativeArkModelDefaultsAndExplicitRestrictions(t *testing.T) {
 	for _, protocol := range []string{"volcengine-ark-video", "volcengine-ark-agent-plan-video"} {

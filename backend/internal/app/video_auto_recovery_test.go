@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"infinite-canvas/backend/internal/generation"
 	"infinite-canvas/backend/internal/model"
 	localtask "infinite-canvas/backend/internal/task"
 )
@@ -161,7 +160,7 @@ func TestVideoAndUpscaleAutomaticRecoveryDownloadsAndBindsCanvas(t *testing.T) {
 		t.Fatalf("upscale before recovery = %+v err=%v", beforeUp, err)
 	}
 
-	if err := s.recoverFailedVideos(generation.WithEndpoints(context.Background(), generation.Endpoints{BeefAPIVideoBaseURL: upstream.URL}), 8); err != nil {
+	if err := s.recoverFailedVideos(context.Background(), 8); err != nil {
 		t.Fatalf("recoverFailedVideos error = %v", err)
 	}
 	if err := s.RecoverIncompleteGenerationDeliveries(0); err != nil {
@@ -475,7 +474,7 @@ func TestRecoverTaskResetsBackoffAndRecoversAcrossDeliveryImageVideoAndUpscaleWi
 		t.Fatal(err)
 	}
 
-	ctx := generation.WithEndpoints(context.Background(), generation.Endpoints{BeefAPIVideoBaseURL: upstream.URL})
+	ctx := context.Background()
 	for _, tc := range []struct {
 		id      string
 		wantRun int

@@ -17,7 +17,6 @@ import (
 
 const DefaultVideoPollInterval = 30 * time.Second
 
-
 type VideoPollPolicy struct {
 	QueryStage            string
 	InitialDelay          time.Duration

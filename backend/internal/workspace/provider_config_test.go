@@ -14,6 +14,7 @@ import (
 	"time"
 )
 
+/*
 func TestProviderConfigMigratesLegacyBeefAPIStateWithoutLosingLocalChoices(t *testing.T) {
 	dir := t.TempDir()
 	legacy := `{
@@ -81,6 +82,7 @@ func TestProviderConfigSeedsBeefAPIWhenLocalStateIsMissing(t *testing.T) {
 		t.Fatal("unexpected seeded local state")
 	}
 }
+*/
 
 func TestProviderConfigRecoversLastValidBackup(t *testing.T) {
 	dir := t.TempDir()

@@ -100,6 +100,17 @@ func ResolveAssistantProvider(snapshot AssistantConfigSnapshot, lookup ManagedCr
 }
 
 func ResolveAssistantChannelModel(snapshot AssistantConfigSnapshot, modelKey string, lookup ManagedCredentialLookup) (assistant.Provider, string) {
+	channelID, modelID := SplitModelKey(modelKey)
+	var channel AssistantChannel
+	var found bool
+	if channelID != "" {
+		channel, found = findEnabledAssistantChannel(snapshot, channelID)
+	} else {
+		channel, found = findEnabledAssistantChannelForModel(snapshot, modelID)
+	}
+	if found && assistantModelAlias(channel, modelID) == MediaReviewModel {
+		return assistant.Provider{}, AssistantReasonProtocolUnsupported
+	}
 	return resolveChannelModel(snapshot, modelKey, lookup)
 }
 

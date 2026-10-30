@@ -216,11 +216,11 @@ func TestSeedanceReferenceMinimumsAndRouteIdentification(t *testing.T) {
 		if got := pixels("volcengine-ark-video", ""); got != documentedSeedanceVideoMinPixels {
 			t.Errorf("ark = %d", got)
 		}
-		if got := pixels("newapi-channel-2", "https://beefapi.com/v1"); got != documentedSeedanceVideoMinPixels {
-			t.Errorf("material host = %d", got)
+		if got := pixels("newapi-channel-2", "https://video.sistinelove.cn/v1"); got != documentedSeedanceVideoMinPixels {
+			t.Errorf("NewAPI host = %d", got)
 		}
-		if got := pixels("newapi-channel-2", "https://relay.example.com/v1"); got != OfficialSeedanceVideoMinPixels {
-			t.Errorf("custom host = %d", got)
+		if got := pixels("newapi-channel-2", "https://relay.example.com/v1"); got != documentedSeedanceVideoMinPixels {
+			t.Errorf("custom NewAPI channel = %d", got)
 		}
 	})
 	t.Run("inpaint on native 2.5 needs a 4s reference video", func(t *testing.T) {
@@ -286,7 +286,7 @@ func TestSeedanceProFlashResolutionAndReferenceRolesTable(t *testing.T) {
 			wantTaskTypeConst: false,
 		},
 		{
-			name:              "2.5 Flash on custom host keeps official pixel floor and sets taskTypeConstraints",
+			name:              "2.5 Flash on NewAPI channel uses documented pixel floor and sets taskTypeConstraints",
 			protocol:          "newapi-channel-2",
 			model:             "bytedance/dreamina-seedance-2-5-flash",
 			baseURL:           "https://relay.example.com/v1",
@@ -294,17 +294,17 @@ func TestSeedanceProFlashResolutionAndReferenceRolesTable(t *testing.T) {
 			wantDefaultRes:    "720p",
 			wantMinDuration:   4,
 			wantMinAudioDur:   2,
-			wantMinVideoPixel: OfficialSeedanceVideoMinPixels,
+			wantMinVideoPixel: documentedSeedanceVideoMinPixels,
 			wantMaxImages:     30,
 			wantMaxVideos:     10,
 			wantMaxAudios:     10,
 			wantTaskTypeConst: true,
 		},
 		{
-			name:      "saved draft with 1s duration and 1s audio is tightened to documented floors",
-			protocol:  "newapi-channel-2",
-			model:     "seedance-2.0",
-			baseURL:   "https://relay.example.com/v1",
+			name:     "saved draft with 1s duration and 1s audio is tightened to documented floors",
+			protocol: "newapi-channel-2",
+			model:    "seedance-2.0",
+			baseURL:  "https://relay.example.com/v1",
 			saved: &ModelCapabilityConfig{
 				Version: 1,
 				Video: &VideoCapabilityConfig{

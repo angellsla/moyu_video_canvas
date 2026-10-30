@@ -41,8 +41,8 @@ class WindowsInstallerContractTests(unittest.TestCase):
         self.assertNotIn('MUI_PAGE_WELCOME', text)
         self.assertNotIn('MUI_PAGE_COMPONENTS', text)
         self.assertNotIn('StageDir', text)
-        self.assertIn('!define MUI_FINISHPAGE_RUN "$INSTDIR\\BeefTV.exe"', text)
-        self.assertIn('CreateShortcut "$DESKTOP\\BeefTV.lnk" "$INSTDIR\\BeefTV.exe"', text)
+        self.assertIn('!define MUI_FINISHPAGE_RUN "$INSTDIR\\VideoCanvas.exe"', text)
+        self.assertIn('CreateShortcut "$DESKTOP\\墨羽Canvas.lnk" "$INSTDIR\\VideoCanvas.exe"', text)
         self.assertIn('taskkill.exe', text)
         self.assertIn('Windows 无法移动以下程序文件夹', text)
 
@@ -60,7 +60,7 @@ class WindowsInstallerContractTests(unittest.TestCase):
             root = Path(directory)
             payload = root / 'payload'
             payload.mkdir()
-            (payload / 'BeefTV.exe').write_bytes(b'fixture')
+            (payload / 'VideoCanvas.exe').write_bytes(b'fixture')
             out_dir = root / 'dist'
             result = subprocess.run(
                 ['python3', str(packager_path), '--platform', 'windows-amd64',
@@ -69,7 +69,7 @@ class WindowsInstallerContractTests(unittest.TestCase):
             )
             self.assertIn('(UTF8)', result.stdout)
             self.assertNotIn('warning', result.stdout.lower())
-            self.assertEqual(len(list(out_dir.glob('BeefTV-*-windows-amd64-setup.exe'))), 1)
+            self.assertEqual(len(list(out_dir.glob('VideoCanvas-*-windows-amd64-setup.exe'))), 1)
 
 
 @unittest.skipUnless(sys.platform == 'darwin', 'native macOS disk image verification')
@@ -85,13 +85,13 @@ class MacDiskImageTests(unittest.TestCase):
         packager_spec.loader.exec_module(packager)
         with tempfile.TemporaryDirectory(prefix='beeftv-native-dmg-') as directory:
             root = Path(directory)
-            payload = root / 'fixture with spaces' / 'BeefTV.app'
-            binary = payload / 'Contents/MacOS/BeefTV'
+            payload = root / 'fixture with spaces' / 'VideoCanvas.app'
+            binary = payload / 'Contents/MacOS/VideoCanvas'
             binary.parent.mkdir(parents=True)
             shutil.copyfile('/usr/bin/true', binary)
             binary.chmod(0o755)
             with (payload / 'Contents/Info.plist').open('wb') as info:
-                plistlib.dump({'CFBundleExecutable': 'BeefTV', 'CFBundleIdentifier': 'test.beeftv.dmg',
+                plistlib.dump({'CFBundleExecutable': 'VideoCanvas', 'CFBundleIdentifier': 'test.videocanvas.dmg',
                                'CFBundlePackageType': 'APPL', 'CFBundleVersion': '1'}, info)
             subprocess.run(['codesign', '--force', '--sign', '-', str(payload)], check=True,
                            capture_output=True, text=True)

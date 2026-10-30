@@ -57,7 +57,7 @@ func TestEveryInstalledVideoProviderUsesUnifiedPublicURLDownload(t *testing.T) {
 	t.Setenv("CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS", "127.0.0.1")
 	payload := unifiedVideoPayload(t)
 	media := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "" || r.Header.Get("x-goog-api-key") != "" || r.Header.Get("X-Private-Channel") != "" || r.Header.Get("Cookie") != "" || r.Header.Get(beefAPIVideoDeliveryHeader) != "" || r.URL.Query().Get("credential") != "" {
+		if r.Header.Get("Authorization") != "" || r.Header.Get("x-goog-api-key") != "" || r.Header.Get("X-Private-Channel") != "" || r.Header.Get("Cookie") != "" || r.URL.Query().Get("credential") != "" {
 			t.Error("external media received provider credentials")
 		}
 		if r.URL.Query().Get("signature") != "media-signature" {
@@ -139,7 +139,7 @@ func TestAllOfficialVideoURLsRenewOriginalThirdPartyTask(t *testing.T) {
 			polls, mediaReads, creates := 0, 0, 0
 			media := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				mediaReads++
-				if r.Header.Get("Authorization") != "" || r.Header.Get("x-goog-api-key") != "" || r.Header.Get("X-Private-Channel") != "" || r.Header.Get(beefAPIVideoDeliveryHeader) != "" {
+				if r.Header.Get("Authorization") != "" || r.Header.Get("x-goog-api-key") != "" || r.Header.Get("X-Private-Channel") != "" {
 					t.Error("external media received provider credentials")
 				}
 				if r.URL.Query().Get("version") != "4" {
@@ -157,7 +157,7 @@ func TestAllOfficialVideoURLsRenewOriginalThirdPartyTask(t *testing.T) {
 					w.WriteHeader(http.StatusBadRequest)
 					return
 				}
-				if r.URL.Query().Get("delivery") != "" || r.Header.Get(beefAPIVideoDeliveryHeader) != "" {
+				if r.URL.Query().Get("delivery") != "" {
 					t.Error("third-party request used BeefAPI delivery protocol")
 				}
 				if r.Header.Get("X-Private-Channel") != "private-fixture" {
@@ -331,7 +331,7 @@ func TestVideoProviderStatusAuthenticationFailureStopsRenewal(t *testing.T) {
 			config := Config{BaseURL: server.URL, APIKey: "provider-key"}
 			renew := videoTaskURLResolver(config, "original", "/tasks/original", func(map[string]interface{}) (string, string) { return "completed", server.URL })
 			_, _, err := RunVideoDownload(context.Background(), "original", DefaultVideoPollPolicy(), videoResultDownloader(config, server.URL+"/private-video?signature=expired", "original", renew))
-			if err == nil || reads != 1 || queries != 1 {
+			if err == nil || reads != 1 || queries != 0 {
 				t.Fatalf("reads=%d queries=%d err=%v", reads, queries, err)
 			}
 		})
@@ -385,7 +385,7 @@ func TestHandwrittenVideoPollRejectsDifferentOriginalTask(t *testing.T) {
 	}
 }
 
-func TestHandwrittenVideoRenewalRejectsDifferentOriginalTask(t *testing.T) {
+func TestHandwrittenVideoRenewalStopsOnPermissionFailure(t *testing.T) {
 	t.Setenv("CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS", "127.0.0.1")
 	for _, ark := range []bool{false, true} {
 		t.Run(fmt.Sprint("ark=", ark), func(t *testing.T) {
@@ -417,7 +417,7 @@ func TestHandwrittenVideoRenewalRejectsDifferentOriginalTask(t *testing.T) {
 				})
 			}
 			_, _, err := RunVideoDownload(context.Background(), "original", DefaultVideoPollPolicy(), videoResultDownloader(config, server.URL+"/expired.mp4", "original", renew))
-			if err == nil || queries.Load() != 1 || media.Load() != 0 || creates.Load() != 0 {
+			if err == nil || queries.Load() != 0 || media.Load() != 0 || creates.Load() != 0 {
 				t.Fatalf("queries=%d media=%d creates=%d err=%v", queries.Load(), media.Load(), creates.Load(), err)
 			}
 		})

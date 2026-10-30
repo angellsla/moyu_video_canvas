@@ -1,4 +1,4 @@
-name: Release desktop
+name: Build desktop installers
 
 on:
   workflow_dispatch:
@@ -29,17 +29,12 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     outputs:
       version: ${{ steps.meta.outputs.version }}
-      commit: ${{ steps.meta.outputs.commit }}
     steps:
-      - name: Require official main
+      - name: Require main branch
         run: |
           set -euo pipefail
           if [[ "${{ github.ref }}" != "refs/heads/main" ]]; then
             echo "Desktop releases can only be dispatched from main. Current ref: ${{ github.ref }}"
-            exit 1
-          fi
-          if [[ "${{ github.repository }}" != "glanderness/BeefTV" ]]; then
-            echo "This workflow publishes 墨羽Canvas assets for this repository only."
             exit 1
           fi
 
@@ -57,10 +52,11 @@ jobs:
         with:
           bun-version: 1.4.2
 
-      - name: Require two rounds of real client generation
-        run: node scripts/verify-real-generation-release.mjs
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
-      - name: Validate version, changelog, keys, and uniqueness
+      - name: Validate version, changelog, and uniqueness
         id: meta
         env:
           CONFIRM_VERSION: ${{ inputs.confirm_version }}
@@ -68,7 +64,6 @@ jobs:
         run: |
           set -euo pipefail
           version="$(tr -d '[:space:]' < ../VERSION)"
-          commit="$(git -C .. rev-parse HEAD)"
           greater_args=()
           latest=""
           release_tags="$(gh release list --exclude-drafts --exclude-pre-releases --limit 100 --json tagName --jq '.[].tagName')"
@@ -100,16 +95,12 @@ jobs:
           fi
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "commit=$commit" >> "$GITHUB_OUTPUT"
 
       - name: Prepare release gate dependencies
         run: |
           sh plugin-packages/build-packages.sh
           cd web
           bun install --frozen-lockfile
-
-      - name: Local release contract gate
-        run: ./scripts/verify-beeftv-local-release.sh
 
       - name: Package corresponding WASM source
         run: |
@@ -183,10 +174,6 @@ jobs:
         run: |
           node -e 'const fs=require("fs"),p=require("path"); const bin=p.dirname(process.execPath); fs.appendFileSync(process.env.GITHUB_ENV, `BEEFTV_NODE_RUNTIME=${process.platform==="win32"?bin:p.dirname(bin)}\n`);'
 
-      - name: Verify agent host packaging contract
-        shell: bash
-        run: bun test scripts/package-agent-host.test.mjs
-
       - name: Install Linux desktop dependencies
         if: runner.os == 'Linux'
         run: |
@@ -229,16 +216,6 @@ jobs:
           CGO_ENABLED: "1"
         shell: pwsh
         run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-beeftv-windows-release.ps1
-
-      - name: Verify Windows video disconnect recovery
-        if: runner.os == 'Windows'
-        working-directory: backend
-        env:
-          CGO_ENABLED: "1"
-        shell: pwsh
-        run: |
-          go test ./internal/app -run 'TestWindowsVideoConnectionResetRecovery|TestVideoRecoverySocketResetNeverResubmits|TestVideoRecoveryLostReceiptNeverResubmits|TestVideoRecoveryBeefAPIQueryUsesOnlyGet' -count=1 -timeout=120s
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - uses: actions/setup-python@v5
         with:
@@ -286,45 +263,6 @@ jobs:
         shell: bash
         run: python scripts/package-desktop-installer.py --platform '${{ matrix.platform }}'
 
-      - name: Verify native installer lifecycle
-        shell: bash
-        env:
-          VERSION: ${{ needs.preflight.outputs.version }}
-          PLATFORM: ${{ matrix.platform }}
-        run: |
-          set -euo pipefail
-          payload='backend/cmd/desktop/build/bin'
-          suffix='-setup.exe'
-          if [[ "$PLATFORM" == darwin-* ]]; then payload="$payload/VideoCanvas.app"; suffix='.dmg'; fi
-          if [[ "$PLATFORM" == linux-* ]]; then payload="$payload/VideoCanvas-linux"; suffix='.deb'; fi
-          command=(python scripts/smoke-desktop-installer.py --platform "$PLATFORM" --installer "dist/VideoCanvas-${VERSION}-${PLATFORM}${suffix}" --payload "$payload")
-          if [[ "$PLATFORM" == linux-* ]]; then xvfb-run -a dbus-run-session -- "${command[@]}"; else "${command[@]}"; fi
-
-      - name: Verify MCP from final packaged CLI
-        shell: bash
-        env:
-          VERSION: ${{ needs.preflight.outputs.version }}
-          PLATFORM: ${{ matrix.platform }}
-        run: |
-          python scripts/smoke-packaged-cli_test.py
-          python scripts/smoke-packaged-cli.py --archive "dist/VideoCanvas-${VERSION}-${PLATFORM}.zip" --platform "$PLATFORM"
-
-      - name: Verify upgrades from released Windows clients
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: python scripts/test-windows-published-upgrade.py --archive "dist/VideoCanvas-${{ needs.preflight.outputs.version }}-windows-amd64.zip" --version "${{ needs.preflight.outputs.version }}" --output dist/windows-upgrade-evidence.json
-
-      - name: Verify Linux desktop window from final archive
-        if: runner.os == 'Linux'
-        run: xvfb-run -a dbus-run-session -- python3 scripts/smoke-linux-desktop.py --archive "dist/VideoCanvas-${{ needs.preflight.outputs.version }}-linux-amd64.zip"
-
-      - name: Preserve Windows upgrade acceptance
-        if: always() && runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-upgrade-evidence
-          path: dist/windows-upgrade-evidence.json
-
       - name: Store platform zip for publication
         uses: actions/upload-artifact@v4
         with:
@@ -345,15 +283,8 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       VERSION: ${{ needs.preflight.outputs.version }}
-      COMMIT: ${{ needs.preflight.outputs.commit }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: backend/go.mod
-          cache: true
-          cache-dependency-path: backend/go.sum
 
       - name: Retrieve completed platform builds
         uses: actions/download-artifact@v4

@@ -59,7 +59,7 @@ class SourceBundleTests(unittest.TestCase):
 
     def test_offline_bundle_complete_and_repeatable(self):
         first, second = self.collect("first"), self.collect("second")
-        self.assertEqual(first.name, "BeefTV-v1.2.3-ffmpeg-wasm-sources.tar.gz")
+        self.assertEqual(first.name, "VideoCanvas-v1.2.3-ffmpeg-wasm-sources.tar.gz")
         self.assertEqual(first.read_bytes(), second.read_bytes())
         result = packager.verify_archive(first, self.lock)
         self.assertEqual(result["provenance"]["status"], "unresolved")

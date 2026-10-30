@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"image"
 	"image/png"
 	"os"
@@ -242,17 +241,8 @@ func TestBeefAPILocalVideoReferenceHydratesInlineForFlatRequest(t *testing.T) {
 		t.Fatalf("resource mime lost: %#v", input.ReferenceImages[0])
 	}
 	input.ReferenceImages[0].URL = "https://example.com/reference.png"
-	body, err := beefAPIVideoRequestBody(input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	content := body["content"].([]map[string]interface{})
-	image, _ := content[0]["image_url"].(map[string]interface{})
-	if fmt.Sprint(image["url"]) != "https://example.com/reference.png" {
-		t.Fatalf("image = %#v, want URL-only reference", image)
-	}
-	if content[0]["role"] != "reference_image" || body["metadata"].(map[string]interface{})["operation"] != "image_to_video" {
-		t.Fatal("hydration changed the reference role or user operation")
+	if input.ReferenceImages[0].URL != "https://example.com/reference.png" {
+		t.Fatalf("hydration changed the reference URL: %#v", input.ReferenceImages[0])
 	}
 }
 

@@ -1803,21 +1803,6 @@ func TestSeedance25AudioOnlyRequestBodyOmitsRequiredImage(t *testing.T) {
 	}
 }
 
-func TestBeefAPIAudioURLAcceptsDataAssetAndHTTPS(t *testing.T) {
-	data, err := beefAPIAudioURL(providerMedia{DataURL: "data:audio/mpeg;base64,AAAA"})
-	if err != nil || data != "data:audio/mpeg;base64,AAAA" {
-		t.Fatalf("data audio = %q, %v", data, err)
-	}
-	asset, err := beefAPIAudioURL(providerMedia{URL: "asset://voice"})
-	if err != nil || asset != "asset://voice" {
-		t.Fatalf("asset audio = %q, %v", asset, err)
-	}
-	url, err := beefAPIAudioURL(providerMedia{URL: "https://cdn.example.com/a.mp3"})
-	if err != nil || url != "https://cdn.example.com/a.mp3" {
-		t.Fatalf("https audio = %q, %v", url, err)
-	}
-}
-
 func TestSeedancePayloadPreservesRequestedResolutionAndDuration(t *testing.T) {
 	capability := DefaultModelCapabilityConfigForModel("newapi-channel-2", "seedance-2.5").Video
 	videos, err := seedanceVideosRequestBody(canvasGenerationInput{

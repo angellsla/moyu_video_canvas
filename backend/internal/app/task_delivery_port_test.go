@@ -92,8 +92,7 @@ func TestVideoDeliveryStreamIsVisibleOnWorkspaceTask(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	ctx := generation.WithEndpoints(context.Background(), generation.Endpoints{BeefAPIVideoBaseURL: server.URL})
-	ctx = generation.WithRuntime(ctx, generation.Runtime{Delivery: appTaskDeliveryPort{service: svc, taskID: taskID}, Stages: appTaskStagePort{service: svc, task: task}})
+	ctx := generation.WithRuntime(context.Background(), generation.Runtime{Delivery: appTaskDeliveryPort{service: svc, taskID: taskID}, Stages: appTaskStagePort{service: svc, task: task}})
 	policy := generation.DefaultVideoPollPolicy()
 	sawWaiting := false
 	policy.Sleep = func(_ context.Context, delay time.Duration) error {

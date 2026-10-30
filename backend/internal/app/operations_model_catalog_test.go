@@ -2,11 +2,9 @@ package app
 
 import (
 	"encoding/json"
-	"strconv"
 	"strings"
 	"testing"
 
-	"infinite-canvas/backend/internal/generation"
 	"infinite-canvas/backend/internal/model"
 	"infinite-canvas/backend/internal/modelcatalog"
 	"infinite-canvas/backend/internal/operations"
@@ -74,15 +72,6 @@ func TestAgentModelCatalogBeefAPIVideoContractAndAudioPayload(t *testing.T) {
 			}
 			if !video.GenerateAudio.Supported || video.Duration.Min != 3 || video.Duration.Max != 15 || video.Duration.Default != 5 || len(video.Resolutions) != 1 || video.Resolutions[0] != "720p" || len(video.Ratios) != 3 || video.References.MaxImages != 1 || video.References.MaxVideos != 0 || video.References.MaxAudios != 0 {
 				t.Fatalf("does not match generation contract: %#v", video)
-			}
-			for _, audio := range []bool{video.GenerateAudio.Default, true, false} {
-				payload, err := generation.BeefAPIVideoRequestBody(generation.Input{Mode: "video", Prompt: "synthetic scene", Config: generation.Config{Model: "kling-video-v3", VideoSeconds: strconv.Itoa(video.Duration.Default), VQuality: video.DefaultResolution, Size: video.DefaultRatio, VideoGenerateAudio: strconv.FormatBool(audio)}})
-				if err != nil {
-					t.Fatal(err)
-				}
-				if payload["metadata"].(map[string]any)["generate_audio"] != audio {
-					t.Fatalf("lost selected audio=%v: %#v", audio, payload)
-				}
 			}
 		})
 	}

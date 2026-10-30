@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-
 )
 
 func officialCatalogVideo(t *testing.T) json.RawMessage {
@@ -18,41 +17,6 @@ func officialCatalogVideo(t *testing.T) json.RawMessage {
 		"generateAudio": {"supported": true, "default": true}, "watermark": {"supported": false, "default": false},
 		"operations": ["text_to_video", "image_to_video", "reference_to_video"], "defaultOperation": "text_to_video"
 	}`)
-}
-
-func TestOverlayCatalogVideoCapabilitiesMatchesOfficialBeefAPIContract(t *testing.T) {
-	raw := officialCatalogVideo(t)
-	version := " 1 "
-	items := OverlayCatalogVideoCapabilities([]ChannelModelCatalogItem{{
-		ID: "seedance-2.0", VideoCapabilities: raw, VideoCapabilitiesVersion: &version,
-	}})
-	if len(items) != 1 || items[0].VideoCapabilitiesVersion == nil || *items[0].VideoCapabilitiesVersion != "1" {
-		t.Fatalf("overlay version = %#v", items)
-	}
-	want, ok := NormalizeCatalogVideoCapability(raw)
-	if !ok {
-		t.Fatal("official contract rejected the fixture")
-	}
-	wantRaw, err := json.Marshal(want)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(items[0].VideoCapabilities, wantRaw) {
-		t.Fatalf("overlay drifted from official contract: got %s want %s", items[0].VideoCapabilities, wantRaw)
-	}
-}
-
-func TestOverlayCatalogVideoCapabilitiesClearsInvalidPayloads(t *testing.T) {
-	version := "1"
-	items := OverlayCatalogVideoCapabilities([]ChannelModelCatalogItem{
-		{ID: "bad", VideoCapabilities: json.RawMessage(`{"operations":["text_to_video"]}`), VideoCapabilitiesVersion: &version},
-		{ID: "empty", VideoCapabilities: json.RawMessage(`null`)},
-	})
-	for _, item := range items {
-		if item.VideoCapabilities != nil || item.VideoCapabilitiesVersion != nil {
-			t.Fatalf("invalid overlay retained: %#v", item)
-		}
-	}
 }
 
 func TestMergeCatalogExtrasEnrichesAndAppends(t *testing.T) {

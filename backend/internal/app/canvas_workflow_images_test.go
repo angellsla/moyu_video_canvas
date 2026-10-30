@@ -89,7 +89,7 @@ func TestCanvasWorkflowDescribeTemplateRoundTrip(t *testing.T) {
 		for _, operation := range s.CanvasWorkflowOperations() {
 			if operation.ID == id {
 				for _, field := range operation.Fields {
-				if field.Key == "modelOption" {
+					if field.Key == "modelOption" {
 						found = len(field.Options) > 0
 					}
 				}

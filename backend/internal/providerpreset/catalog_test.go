@@ -2,25 +2,20 @@ package providerpreset
 
 import "testing"
 
-func TestBeefAPIPresetIsPinnedWithoutFreezingRemoteModelCatalog(t *testing.T) {
-	preset := BeefAPI()
-	if preset.ID != "beefapi" {
-		t.Fatalf("preset id = %q", preset.ID)
-	}
-	if preset.DisplayName != "BeefTV" || preset.BaseURL != "https://beeftv.app" {
-		t.Fatalf("unexpected BeefAPI identity: %#v", preset)
-	}
-	if !preset.Pinned || preset.PresetVersion < 1 {
-		t.Fatalf("preset must be pinned and versioned: %#v", preset)
-	}
-
-	if len(preset.Models) != 0 {
-		t.Fatalf("remote BeefAPI catalog must be fetched, got %d hard-coded models", len(preset.Models))
+func TestBuiltinChannelsAreUserConfigured(t *testing.T) {
+	if got := BuiltinChannels(); len(got) != 0 {
+		t.Fatalf("retired managed channels must not be injected: %#v", got)
 	}
 }
 
 func TestCatalogValidationRejectsUnsafeOrAmbiguousPresets(t *testing.T) {
-	valid := BeefAPI()
+	valid := ChannelPreset{
+		ID:            "newapi",
+		DisplayName:   "墨羽Canvas API",
+		BaseURL:       "https://video.sistinelove.cn",
+		PresetVersion: 1,
+		Pinned:        true,
+	}
 	valid.Models = []ModelProfile{{Model: "test", Capability: "text", Protocol: "chat-completion", CapabilityConfig: []byte(`{"version":1,"text":{"streaming":true}}`)}}
 	tests := []struct {
 		name   string

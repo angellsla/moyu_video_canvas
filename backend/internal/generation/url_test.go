@@ -41,18 +41,14 @@ func TestChannelAPIURLForProtocolUsesAgnesOriginPollPath(t *testing.T) {
 	}
 }
 
-func TestProviderDownloadURLNormalizesBeefAPIResultToConfiguredOrigin(t *testing.T) {
+func TestProviderDownloadURLKeepsCrossOriginResultsExternal(t *testing.T) {
 	tests := []struct {
 		name, baseURL, resultURL, want string
 	}{
 		{name: "same origin", baseURL: "https://provider.example", resultURL: "https://provider.example/files/video.mp4", want: "https://provider.example/files/video.mp4"},
-		{name: "BeefTV uses configured origin", baseURL: "https://beeftv.app", resultURL: "https://beefapi.com/v1/videos/task-1/content", want: "https://beeftv.app/v1/videos/task-1/content"},
-		{name: "BeefTV lookalike stays external", baseURL: "https://beeftv.app", resultURL: "https://beeftv.app.attacker.example/video.mp4", want: "https://beeftv.app.attacker.example/video.mp4"},
-		{name: "beef enterprise uses configured origin", baseURL: "https://enterprise.beefapi.com", resultURL: "https://beefapi.com/v1/videos/task-1/content", want: "https://enterprise.beefapi.com/v1/videos/task-1/content"},
-		{name: "beef subdomain uses configured origin", baseURL: "https://api.beefapi.com", resultURL: "https://cdn.beefapi.com/video.mp4?token=result", want: "https://api.beefapi.com/video.mp4?token=result"},
-		{name: "lookalike host stays external", baseURL: "https://enterprise.beefapi.com", resultURL: "https://beefapi.com.attacker.example/video.mp4", want: "https://beefapi.com.attacker.example/video.mp4"},
-		{name: "custom provider does not rewrite beef", baseURL: "https://provider.example", resultURL: "https://beefapi.com/video.mp4", want: "https://beefapi.com/video.mp4"},
-		{name: "insecure cross origin stays external", baseURL: "https://enterprise.beefapi.com", resultURL: "http://beefapi.com/video.mp4", want: "http://beefapi.com/video.mp4"},
+		{name: "lookalike host stays external", baseURL: "https://provider.example", resultURL: "https://provider.example.attacker.example/video.mp4", want: "https://provider.example.attacker.example/video.mp4"},
+		{name: "custom provider stays external", baseURL: "https://provider.example", resultURL: "https://cdn.example/video.mp4", want: "https://cdn.example/video.mp4"},
+		{name: "insecure cross origin stays external", baseURL: "https://provider.example", resultURL: "http://cdn.example/video.mp4", want: "http://cdn.example/video.mp4"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -53,7 +53,7 @@ func TestWindowsLockedScratchMigrationAndCleanupRetry(t *testing.T) {
 	if err = CleanupPrevious(source, target, Lock); err == nil {
 		t.Fatal("reported full cleanup with locked scratch")
 	}
-	if !fileInUse(err) || !strings.Contains(err.Error(), "请重启 BeefTV") {
+	if !fileInUse(err) || !strings.Contains(err.Error(), "请重启 VideoCanvas") {
 		t.Fatal("lost lock cause or recovery advice", err)
 	}
 	if err = VerifySnapshot(source, files, false); err != nil {
@@ -68,7 +68,7 @@ func TestWindowsLockedScratchMigrationAndCleanupRetry(t *testing.T) {
 	if err = SaveMigration(source, target, source, legacyFiles); err != nil {
 		t.Fatal(err)
 	}
-	if err = CleanupPrevious(source, target, Lock); !fileInUse(err) || !strings.Contains(err.Error(), "请重启 BeefTV") {
+	if err = CleanupPrevious(source, target, Lock); !fileInUse(err) || !strings.Contains(err.Error(), "请重启 VideoCanvas") {
 		t.Fatal("old receipt bypassed scratch handling", err)
 	}
 	if err = VerifySnapshot(source, files, false); err != nil {

@@ -2,12 +2,42 @@ package generation
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"infinite-canvas/backend/internal/protocol"
 )
+
+// captureImagePort is a local transport double for Seedream request-shape
+// tests. The production runtime injects the app-owned image port; these tests
+// only need to capture the request and return one valid image payload.
+type captureImagePort struct {
+	calls       int
+	path        string
+	contentType string
+	body        map[string]interface{}
+}
+
+func (p *captureImagePort) Intercept(req *http.Request) (bool, []byte, string, error) {
+	p.calls++
+	p.path = req.URL.Path
+	p.contentType = req.Header.Get("Content-Type")
+	if req.Body != nil {
+		raw, err := io.ReadAll(req.Body)
+		if err != nil {
+			return true, nil, "", err
+		}
+		var body map[string]interface{}
+		if json.Unmarshal(raw, &body) == nil {
+			p.body = body
+		}
+	}
+	return true, []byte(`{"data":[{"b64_json":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jR1sAAAAASUVORK5CYII="}]}`), "application/json", nil
+}
 
 // 评审 #265 问题 1：Ark 渠道改走通用插件后，图层拆分、图片格式、水印和提示词优化会静默丢失。
 // 本 PR 不带那处改动，国内 Pro 型号仍走 Seedream 专用请求体。这里加载仓库真实 Ark 插件

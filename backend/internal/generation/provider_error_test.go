@@ -340,31 +340,6 @@ func TestThinkingModeToolChoice(t *testing.T) {
 	}
 }
 
-func TestBeefAPIErrorCodeInventory(t *testing.T) {
-	data, err := os.ReadFile("../../../fixtures/generation-error-codes.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var inventory map[string]generation.FailureCategory
-	if err := json.Unmarshal(data, &inventory); err != nil {
-		t.Fatal(err)
-	}
-	if len(inventory) != 53 {
-		t.Fatalf("BeefAPI error code inventory has %d entries, want 53", len(inventory))
-	}
-	for code, category := range inventory {
-		t.Run(code, func(t *testing.T) {
-			for _, status := range []int{200, 400, 402, 429, 503} {
-				body := fmt.Sprintf(`{"error":{"code":%q,"message":"opaque failure"}}`, code)
-				failure := generation.ClassifyHTTP(status, "", body)
-				if failure.Category != category || !failure.FromCode || failure.ProviderCode != code {
-					t.Errorf("HTTP %d code %s: got category=%s fromCode=%v code=%q; want %s", status, code, failure.Category, failure.FromCode, failure.ProviderCode, category)
-				}
-			}
-		})
-	}
-}
-
 func TestCanonicalCategoriesRoundTripAndRetryPolicy(t *testing.T) {
 	categories := []generation.FailureCategory{
 		generation.CategoryAuth, generation.CategoryPermission, generation.CategoryQuotaUser,

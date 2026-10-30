@@ -6,7 +6,9 @@ RUN apk add --no-cache nodejs zip
 
 WORKDIR /src
 COPY plugin-packages ./plugin-packages
-RUN ./plugin-packages/build-packages.sh
+# Git stores repository shell scripts without executable bits on Windows
+# checkouts; invoke through a real shell so the image build is portable.
+RUN sh ./plugin-packages/build-packages.sh
 
 FROM golang:1.25-alpine AS backend-build
 

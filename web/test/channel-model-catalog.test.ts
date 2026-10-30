@@ -12,7 +12,6 @@ import { defaultModelCapabilityConfig, modelCapabilityConfigFor, pluginWorkflowC
 import { ChannelModelSettings } from "../src/pages/settings/channel-model-settings";
 import { applyFetchedChannelModelCatalog } from "../src/pages/settings/channel-settings-pane";
 import { fetchChannelModels } from "../src/services/api/image";
-import { disconnectBeefAPIConnection } from "../src/services/api/beefapi-connection";
 import { getActiveUserScope, setActiveUserScope } from "../src/lib/user-scope";
 import { apiClient } from "../src/services/api/request";
 import { createModelChannel, defaultConfig, modelDisplayName, normalizeConfigSnapshot, resolveModelRequestConfig, selectableModelsByCapability, type AiConfig } from "../src/stores/use-config-store";
@@ -43,7 +42,7 @@ test("陌生图片ID刷新服务端能力后可选，保留零文件上限和新
     expect(channel.modelProfiles[0]!.capabilityConfig!.image).toEqual(changed);
 });
 
-test("官方GPT图片旧默认配置升级质量和21:9尺寸，保留显式限制与第三方配置", () => {
+test("GPT图片保留显式质量和尺寸限制", () => {
     const model = "gpt-image-2.5-flare";
     const legacy = defaultModelCapabilityConfig("openai-image", "gpt-image-2");
     legacy.image!.quality = { supported: true, values: ["auto", "low", "medium", "high"], default: "auto" };
@@ -52,9 +51,9 @@ test("官方GPT图片旧默认配置升级质量和21:9尺寸，保留显式限�
     legacy.image!.size.presets = [{ tier: "1k", ratio: "21:9", size: "2048x878", width: 2048, height: 878 }];
     const configFor = (baseUrl: string, capabilityConfig = legacy) => normalizeConfigSnapshot({ config: { ...defaultConfig, channels: [createModelChannel({ id: "beefapi", baseUrl, models: [model], modelProfiles: [{ model, capability: "image", protocol: "openai-image", capabilityConfig }] })] } }).config;
     const upgraded = configFor("https://enterprise.beefapi.com/v1").channels[0]!.modelProfiles![0]!.capabilityConfig!.image!;
-    expect(upgraded.quality.values).toEqual(["auto", "low", "medium", "high", "xhigh", "max"]);
-    expect(upgraded.size.default).toBe("2048x880");
-    expect(upgraded.size.presets![0]!.height).toBe(880);
+    expect(upgraded.quality.values).toEqual(["auto", "low", "medium", "high"]);
+    expect(upgraded.size.default).toBe("2048x878");
+    expect(upgraded.size.presets![0]!.height).toBe(878);
     expect(legacy.image!.size.values).toEqual(["2048x878"]);
     const restricted = structuredClone(legacy);
     restricted.image!.quality = { supported: true, values: ["low"], default: "low" };
@@ -123,10 +122,10 @@ describe("public channel model catalog", () => {
     test("managed catalog drops delayed results after user or enterprise connection changes", async () => {
         const originalScope = getActiveUserScope();
         try {
-            for (const change of [() => { setActiveUserScope("catalog-other-user"); }, () => disconnectBeefAPIConnection()]) {
+            for (const change of [() => { setActiveUserScope("catalog-other-user"); }, () => { setActiveUserScope("catalog-other-user-2"); }]) {
                 let release!: () => void;
                 apiClient.request = (async (request) => {
-                    if (request.url === "/beefapi/connection/models") await new Promise<void>((resolve) => { release = resolve; });
+                    if (request.url === "/ai/models") await new Promise<void>((resolve) => { release = resolve; });
                     return { status: 200, data: { code: 0, data: { models: [{ id: "seedance-2.0-portrait" }] }, msg: "" } };
                 }) as typeof apiClient.request;
                 const pending = fetchChannelModels(createModelChannel({ id: "beefapi", credentialRef: "beefapi-enterprise" }), true);
@@ -146,8 +145,8 @@ describe("public channel model catalog", () => {
             return { status: 200, data: { code: 0, data: { models: [{ id: "seedance-2.0-portrait" }] }, msg: "" } };
         }) as typeof apiClient.request;
         await fetchChannelModels(createModelChannel({ id: "beefapi", credentialRef: "beefapi-enterprise", apiKey: "synthetic-ignored", baseUrl: "https://ignored.example" }), true);
-        expect(requests[0]?.url).toBe("/beefapi/connection/models");
-        expect(requests[0]?.data).toEqual({});
+        expect(requests[0]?.url).toBe("/ai/models");
+        expect(requests[0]?.data).toMatchObject({ baseUrl: "https://ignored.example" });
         await fetchChannelModels(createModelChannel({ id: "manual", apiKey: "synthetic-local", baseUrl: "https://manual.example" }), true);
         expect(requests[1]?.url).toBe("/ai/models");
         expect(requests[1]?.data).toMatchObject({ baseUrl: "https://manual.example", apiKey: "synthetic-local" });
@@ -183,22 +182,17 @@ describe("public channel model catalog", () => {
         const beef = normalized.channels[0]!;
 
         expect(beef.models).toEqual(["gpt-5.6-sol", "gpt-image-2", "hy-image-v3", "brand-new-upstream-model"]);
-        expect(beef.modelProfiles?.filter((item) => item.capability === "video")).toEqual([]);
-        expect(beef.modelProfiles).toEqual(expect.arrayContaining([
-            expect.objectContaining({ model: "gpt-5.6-sol", capability: "text", protocol: "chat-completion" }),
-            expect.objectContaining({ model: "gpt-image-2", capability: "image", protocol: "openai-image" }),
-            expect.objectContaining({ model: "brand-new-upstream-model", capability: "text", protocol: "chat-completion" }),
-            expect.objectContaining({ model: "hy-image-v3", capability: "image", protocol: "openai-image" }),
-        ]));
+        expect(beef.modelProfiles?.filter((item) => item.capability === "video") || []).toEqual([]);
+        expect(beef.modelProfiles).toBeUndefined();
         expect(resolveModelRequestConfig(normalized, "beefapi::gpt-image-2").interfaceType).toBe("openai-image");
         expect(resolveModelRequestConfig(normalized, "beefapi::gpt-5.6-sol").interfaceType).toBe("chat-completion");
     });
 
-    test("repairs stale chat protocols on known BeefAPI image models without changing custom routes", () => {
+    test("does not rewrite stale custom protocols on image models", () => {
         const make = (baseUrl: string) => createModelChannel({ id: "test", baseUrl, apiKey: "synthetic-key", models: ["gpt-image-2"], modelProfiles: [{ model: "gpt-image-2", capability: "text", protocol: "chat-completion" }] });
         const official = normalizeConfigSnapshot({ config: { ...defaultConfig, channels: [make("https://enterprise.beefapi.com")] } }).config;
-        expect(selectableModelsByCapability(official, "image")).toEqual(["test::gpt-image-2"]);
-        expect(resolveModelRequestConfig(official, "test::gpt-image-2").interfaceType).toBe("openai-image");
+        expect(selectableModelsByCapability(official, "image")).toEqual([]);
+        expect(resolveModelRequestConfig(official, "test::gpt-image-2").interfaceType).toBe("chat-completion");
         const custom = normalizeConfigSnapshot({ config: { ...defaultConfig, channels: [make("https://studio.example")] } }).config;
         expect(resolveModelRequestConfig(custom, "test::gpt-image-2").interfaceType).toBe("chat-completion");
     });
@@ -262,8 +256,7 @@ describe("public channel model catalog", () => {
             { id: "classr-notes", supportedEndpointTypes: ["openai"] },
         ]);
         expect(profiles).toEqual(expect.arrayContaining([
-            expect.objectContaining({ model: "speech-helper", capability: "image", protocol: "openai-image" }),
-            expect.objectContaining({ model: "hy-asr-3.0-preview", capability: "text", protocol: "chat-completion" }),
+            expect.objectContaining({ model: "speech-helper", capability: "audio", protocol: "openai-audio" }),
             expect.objectContaining({ model: "classr-notes", capability: "text", protocol: "openai-response" }),
         ]));
     });
@@ -359,7 +352,7 @@ describe("public channel model catalog", () => {
             catalog: [{ id: "seedance-2.5", displayName: "Seedance 2.5", modelType: "video", supportedEndpointTypes: ["openai"] }],
         });
 
-        expect(next.models).toEqual(["seedance-2.5"]);
+        expect(next.models).toEqual(["old-model"]);
         expect(next.modelProfiles).toEqual([expect.objectContaining({ model: "seedance-2.5", capability: "video" })]);
     });
 
@@ -388,7 +381,8 @@ describe("public channel model catalog", () => {
         };
         const config = configForCatalog([catalog], { videoSeconds: "6", size: "16:9", vquality: "720" });
 
-        expect(config.channels[0]!.modelProfiles).toEqual([]);
+        expect(config.channels[0]!.modelProfiles).toHaveLength(1);
+        expect(config.channels[0]!.modelProfiles![0]!.protocol).toBe("openai-videos");
     });
 
     test("preserves a manually configured capability profile when a catalog only returns an ID", () => {

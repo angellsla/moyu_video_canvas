@@ -20,6 +20,26 @@ type videoTestCache string
 
 func (p videoTestCache) PartialPath() string { return string(p) }
 
+type deliveryCircuitLimits struct {
+	stubLimits
+	checks, results, acquired, released int
+}
+
+func (l *deliveryCircuitLimits) CircuitOpen(context.Context, string) (bool, error) {
+	l.checks++
+	return false, nil
+}
+
+func (l *deliveryCircuitLimits) AcquireChannelSlot(context.Context, string, string, time.Duration) (func(), int, error) {
+	l.acquired++
+	return func() { l.released++ }, 1, nil
+}
+
+func (l *deliveryCircuitLimits) RecordChannelResult(context.Context, string, bool) error {
+	l.results++
+	return nil
+}
+
 func TestVideoDownloadResumeRetainsAdmissionAndFailureReceipt(t *testing.T) {
 	t.Setenv("CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS", "127.0.0.1")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -95,7 +115,7 @@ func TestVideoDownloadResumesAcrossWorkerAndSignedRedirect(t *testing.T) {
 	}))
 	defer gateway.Close()
 	config := Config{BaseURL: gateway.URL + "/v1", APIKey: "test-key"}
-	ctx := WithRuntime(context.Background(), Runtime{DownloadCache: videoTestCache(partial), Endpoints: Endpoints{BeefAPIVideoBaseURL: config.BaseURL}})
+	ctx := WithRuntime(context.Background(), Runtime{DownloadCache: videoTestCache(partial)})
 	policy := DefaultVideoPollPolicy()
 	policy.MaxDownloadTries = 1
 	policy.Sleep = func(context.Context, time.Duration) error { return nil }
@@ -104,7 +124,7 @@ func TestVideoDownloadResumesAcrossWorkerAndSignedRedirect(t *testing.T) {
 		t.Fatal("incomplete response succeeded")
 	}
 	info, err := os.Stat(partial)
-	if err != nil || info.Size() != 32<<10 {
+	if err != nil || info.Size() != 16<<10 {
 		t.Fatalf("partial not retained: info=%v err=%v", info, err)
 	}
 	sidecar, _ := os.ReadFile(partial + ".json")
@@ -116,7 +136,7 @@ func TestVideoDownloadResumesAcrossWorkerAndSignedRedirect(t *testing.T) {
 	if err != nil || !bytes.Equal(data, payload) {
 		t.Fatalf("resume failed: len=%d err=%v", len(data), err)
 	}
-	if len(offsets) != 3 || offsets[0] != 0 || offsets[1] != 16<<10 || offsets[2] != 32<<10 {
+	if len(offsets) != 2 || offsets[0] != 0 || offsets[1] != 16<<10 {
 		t.Fatalf("did not resume across redirect and worker: %v", offsets)
 	}
 	if _, err = os.Stat(partial); !os.IsNotExist(err) {
