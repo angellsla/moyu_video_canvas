@@ -1,0 +1,22 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "canvas-skills",
+  "version": "0.2.0",
+  "description": "搜索公开创作技能，读取固定发布版本，下载或安装到本机。",
+  "author": { "name": "墨羽Canvas" },
+  "license": "MIT",
+  "keywords": ["skills", "video", "storyboard", "创作"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "墨羽Canvas Skills",
+        "shortDescription": "查找和安装公开创作技能",
+        "longDescription": "查询技能用途、固定版本、来源和能力要求，下载或安装公开技能。",
+        "developerName": "墨羽Canvas",
+        "category": "Productivity",
+        "capabilities": ["Read"],
+        "defaultPrompt": ["找一个适合把剧本拆成分镜的技能。"]
+      }
+    }
+  }
+}

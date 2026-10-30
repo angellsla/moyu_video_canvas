@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 300 300" role="img" aria-labelledby="title desc">
+  <title id="title">墨羽Canvas 应用图标</title>
+  <desc id="desc">由彩色墨羽、播放三角与环幕轨道组成的圆角方形图标。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#080B11"/>
+      <stop offset="0.58" stop-color="#101827"/>
+      <stop offset="1" stop-color="#182C37"/>
+    </linearGradient>
+    <linearGradient id="spectrum" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#6CE6CB"/>
+      <stop offset="0.36" stop-color="#6E9BFF"/>
+      <stop offset="0.72" stop-color="#DE7BFF"/>
+      <stop offset="1" stop-color="#FFBC72"/>
+    </linearGradient>
+    <radialGradient id="accentGlow">
+      <stop offset="0" stop-color="#FFBC72" stop-opacity="0.42"/>
+      <stop offset="0.36" stop-color="#FFBC72" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#FFBC72" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="300" height="300" rx="84" fill="url(#bg)"/>
+  <path d="M36 183C40 97 107 30 195 38" fill="none" stroke="url(#spectrum)" stroke-width="5" stroke-linecap="round" opacity="0.92"/>
+  <path d="M98 282C191 297 270 245 284 143" fill="none" stroke="#B8F9EF" stroke-opacity="0.65" stroke-width="3" stroke-linecap="round"/>
+  <path d="M62 233C42 204 42 167 55 133" fill="none" stroke="#6CE6CB" stroke-opacity="0.55" stroke-width="2" stroke-linecap="round"/>
+  <path d="M151 52C106 65 72 112 66 164C60 218 88 257 137 253C186 249 219 186 208 113C202 82 180 60 151 52Z" fill="url(#spectrum)" opacity="0.96"/>
+  <path d="M158 67C138 121 104 176 71 233" fill="none" stroke="#EAF9FF" stroke-opacity="0.86" stroke-width="5" stroke-linecap="round"/>
+  <path d="M150 92C127 100 103 113 84 133M151 119C127 129 103 143 82 165M148 148C124 160 101 177 85 197M142 177C120 191 103 207 94 222" fill="none" stroke="#091018" stroke-opacity="0.38" stroke-width="4" stroke-linecap="round"/>
+  <path d="M125 126L177 161L125 196Z" fill="#091018" fill-opacity="0.86"/>
+  <path d="M128 133L163 161L128 185Z" fill="#E9FFFF" fill-opacity="0.92"/>
+  <circle cx="222" cy="77" r="23" fill="url(#accentGlow)"/>
+  <circle cx="222" cy="77" r="6" fill="#FFBC72"/>
+  <circle cx="72" cy="248" r="4" fill="#DE7BFF"/>
+</svg>

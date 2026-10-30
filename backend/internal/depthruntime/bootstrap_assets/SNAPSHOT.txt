@@ -1,0 +1,9 @@
+Video-Depth-Anything source snapshot
+
+Repository: https://github.com/DepthAnything/Video-Depth-Anything.git
+Commit: 4f5ae23172ba60fd7bc11ef671cca678842c7072
+
+The vda/ tree contains the Python modules required by the vits inference path.
+The worker/ tree is copied from tools/depth-capture/depth_capture and is the
+only application entrypoint. Source downloads and git operations are disabled
+while a worker task is running.

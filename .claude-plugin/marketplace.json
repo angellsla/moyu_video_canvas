@@ -1,0 +1,12 @@
+{
+  "name": "canvas",
+  "owner": { "name": "墨羽Canvas" },
+  "plugins": [
+    {
+      "name": "canvas-skills",
+      "source": "./plugins/canvas-skills",
+      "description": "搜索公开创作技能、读取固定版本并校验安装。",
+      "version": "0.2.0"
+    }
+  ]
+}

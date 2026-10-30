@@ -1,0 +1,20 @@
+---
+title: 墨羽Canvas API 模型渠道连接
+description: 墨羽Canvas API 登录、videoCanvas Key 管理与模型目录同步
+---
+
+在设置的模型渠道中使用 **墨羽Canvas API**，填写 **墨羽Canvas 用户名**和 **墨羽Canvas 密码**。本机后端使用 New API 协议登录固定的中转站地址 `https://video.sistinelove.cn`，查找当前账号下名称精确为 `videoCanvas` 的 API Key：找到已启用的 Key 时读取其完整值；没有同名 Key 时创建一个。
+
+新 Key 使用默认分组，不限制模型范围或配额。同步随后使用该 Key 读取 `/v1/models`，把返回的全部模型加入 `newapi` 渠道，兼容格式为 OpenAI，API Base URL 为 `https://video.sistinelove.cn/v1`。刷新连接会更新模型目录并保留仍存在模型的能力配置。
+
+用户名和密码只用于本次同步请求，不写入模型配置或浏览器持久化；dashboard access token 仅由本机后端临时持有。用于模型请求的 `videoCanvas` Key 写入本地模型渠道配置。若同名 Key 已停用或服务端无法返回完整 Key，同步会提示处理该 Key，不会另建一个同名 Key。
+
+该入口连接的是用户在 New API 中转站的账号，不是产品账号登录或钱包功能。本地工作区本身不要求注册或登录产品账号。
+
+## 同步失败与重试
+
+登录使用独立表单；提交后按钮显示处理中，失败会在表单下方保留错误原因及输入内容，成功后才清空输入。New API 登录、Key 管理或模型目录请求失败时，现有模型渠道配置不会被新渠道覆盖。修复账号或 Key 状态后可再次同步；后端按完整名称查找，因此此前已经创建成功的 `videoCanvas` Key 会被复用。
+
+兼容部署若未开放可选的 `/api/user/login/encryption-key` 并返回 HTTP 404，本机后端使用 HTTPS 下的标准用户名密码登录。其他加密配置读取错误仍直接报告，不会静默降级。模型配置管理仅接受受信任的本机界面；开发脚本只为自己的回环后端及固定前端 Origin 开启开发引导，不改变桌面宿主校验。
+
+该连接只同步 OpenAI 兼容模型目录，不会自动创建生成任务。模型连接测试和生成仍通过对应模型能力及普通 Provider 请求流程执行。

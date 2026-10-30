@@ -1,0 +1,20 @@
+import { normalizeTaskOutcome } from "@/lib/task-outcome";
+import type { CanvasNodeData } from "@/types/canvas";
+
+/** A historical taskId is not a lock. Only live task states / submission are. */
+export function isCanvasNodeGenerating(node: CanvasNodeData | undefined, runningNodeId?: string | null) {
+    if (!node) return false;
+    if (runningNodeId === node.id) return true;
+    const meta = node.metadata;
+    const outcome = normalizeTaskOutcome(meta?.taskOutcome);
+    if (outcome) {
+        if (outcome.phase === "running" || outcome.phase === "fetching") return true;
+        if (outcome.phase === "retrievable") return true;
+        if (outcome.phase === "ready") return !meta?.content && !meta?.storageKey && meta?.status !== "success";
+        return false;
+    }
+    if (meta?.taskId && (meta.taskStatus === "queued" || meta.taskStatus === "running")) return true;
+    if (meta?.taskStatus === "succeeded" && !meta.content && !meta.storageKey) return true;
+    if (["succeeded", "failed", "cancelled"].includes(meta?.taskStatus || "")) return false;
+    return meta?.status === "loading" || Boolean(meta?.taskId && meta.status !== "success" && meta.status !== "error");
+}

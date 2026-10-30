@@ -1,0 +1,388 @@
+name: Release desktop
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_version:
+        description: Must match the VERSION file, for example v1.6.0
+        required: true
+        type: string
+
+concurrency:
+  group: desktop-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  preflight:
+    name: Validate and open draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      commit: ${{ steps.meta.outputs.commit }}
+    steps:
+      - name: Require official main
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.ref }}" != "refs/heads/main" ]]; then
+            echo "Desktop releases can only be dispatched from main. Current ref: ${{ github.ref }}"
+            exit 1
+          fi
+          if [[ "${{ github.repository }}" != "glanderness/BeefTV" ]]; then
+            echo "This workflow publishes 墨羽Canvas assets for this repository only."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache: true
+          cache-dependency-path: backend/go.sum
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Require two rounds of real client generation
+        run: node scripts/verify-real-generation-release.mjs
+
+      - name: Validate version, changelog, keys, and uniqueness
+        id: meta
+        env:
+          CONFIRM_VERSION: ${{ inputs.confirm_version }}
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < ../VERSION)"
+          commit="$(git -C .. rev-parse HEAD)"
+          greater_args=()
+          latest=""
+          release_tags="$(gh release list --exclude-drafts --exclude-pre-releases --limit 100 --json tagName --jq '.[].tagName')"
+          while IFS= read -r tag; do
+            [[ -z "$tag" ]] && continue
+            if go run ./cmd/update-release validate-version --version "$tag" >/dev/null 2>&1; then
+              if [[ -z "$latest" ]] || go run ./cmd/update-release validate-version --version "$tag" --greater-than "$latest" >/dev/null 2>&1; then
+                latest="$tag"
+              fi
+            fi
+          done <<< "$release_tags"
+          if [[ -n "$latest" ]]; then
+            greater_args+=(--greater-than "$latest")
+          fi
+          go run ./cmd/update-release validate-version \
+            --version "$version" \
+            --confirm "$CONFIRM_VERSION" \
+            "${greater_args[@]}"
+
+          go run ./cmd/update-release changelog --file ../CHANGELOG.md --version "$version" > "$RUNNER_TEMP/release-notes.md"
+          if gh release view "$version" >/dev/null 2>&1; then
+            echo "GitHub release $version already exists. Published release assets are not overwritten."
+            echo "If a failed draft was never published, delete it and its tag only after confirming it was never public."
+            exit 1
+          fi
+          if git ls-remote --exit-code origin "refs/tags/$version" >/dev/null 2>&1; then
+            echo "Git tag $version already exists. Choose a new VERSION; published tags are not reused."
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare release gate dependencies
+        run: |
+          sh plugin-packages/build-packages.sh
+          cd web
+          bun install --frozen-lockfile
+
+      - name: Local release contract gate
+        run: ./scripts/verify-beeftv-local-release.sh
+
+      - name: Package corresponding WASM source
+        run: |
+          python3 scripts/package-wasm-sources.py \
+            --version "${{ steps.meta.outputs.version }}" \
+            --binary-dir web/node_modules/@ffmpeg/core/dist/esm
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: media-wasm-source
+          path: dist/VideoCanvas-${{ steps.meta.outputs.version }}-ffmpeg-wasm-sources.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Create draft GitHub release
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "$VERSION" \
+            --draft \
+            --title "墨羽Canvas $VERSION" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" \
+            --target "${{ github.sha }}"
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: preflight
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: darwin-arm64
+            wails_platform: darwin/arm64
+          - os: macos-15-intel
+            platform: darwin-amd64
+            wails_platform: darwin/amd64
+          - os: windows-2022
+            platform: windows-amd64
+            wails_platform: windows/amd64
+          - os: ubuntu-24.04
+            platform: linux-amd64
+            wails_platform: linux/amd64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: media-wasm-source
+          path: dist
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache: true
+          cache-dependency-path: backend/go.sum
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.1'
+
+      - name: Select bundled Node runtime
+        shell: bash
+        run: |
+          node -e 'const fs=require("fs"),p=require("path"); const bin=p.dirname(process.execPath); fs.appendFileSync(process.env.GITHUB_ENV, `BEEFTV_NODE_RUNTIME=${process.platform==="win32"?bin:p.dirname(bin)}\n`);'
+
+      - name: Verify agent host packaging contract
+        shell: bash
+        run: bun test scripts/package-agent-host.test.mjs
+
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          bash scripts/configure-ubuntu-apt.sh
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev ffmpeg fonts-noto-cjk xvfb xdotool dbus-x11
+
+      - name: Install MSYS2 UCRT64 GCC
+        id: msys2
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          release: true
+          path-type: inherit
+          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-binutils
+
+      - name: Assert DWARF 5 CGO compiler
+        if: runner.os == 'Windows'
+        env:
+          MSYSTEM_PREFIX: ${{ steps.msys2.outputs.msys2-location }}\ucrt64
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\assert-windows-dwarf5-cgo.ps1
+
+      - name: Build official plugin packages
+        if: runner.os != 'Windows'
+        run: sh plugin-packages/build-packages.sh
+
+      - name: Build macOS or Linux desktop
+        if: runner.os != 'Windows'
+        env:
+          BEEFTV_SKIP_LOCAL_VERIFY: "1"
+          BEEFTV_WAILS_PLATFORM: ${{ matrix.wails_platform }}
+        run: ./scripts/build-beeftv-release.sh
+
+      - name: Build Windows desktop
+        if: runner.os == 'Windows'
+        env:
+          CGO_ENABLED: "1"
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-beeftv-windows-release.ps1
+
+      - name: Verify Windows video disconnect recovery
+        if: runner.os == 'Windows'
+        working-directory: backend
+        env:
+          CGO_ENABLED: "1"
+        shell: pwsh
+        run: |
+          go test ./internal/app -run 'TestWindowsVideoConnectionResetRecovery|TestVideoRecoverySocketResetNeverResubmits|TestVideoRecoveryLostReceiptNeverResubmits|TestVideoRecoveryBeefAPIQueryUsesOnlyGet' -count=1 -timeout=120s
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Assert desktop payload excludes depth runtime data
+        working-directory: backend
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          input="cmd/desktop/build/bin"
+          if [[ "$PLATFORM" == darwin-* ]]; then input="$input/VideoCanvas.app"; fi
+          if [[ "$PLATFORM" == linux-amd64 ]]; then input="$input/VideoCanvas-linux"; fi
+          python ../scripts/desktop_payload_guard.py --input "$input"
+
+      - name: Package updater zip
+        working-directory: backend
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ../dist
+          input="cmd/desktop/build/bin"
+          if [[ "$PLATFORM" == darwin-* ]]; then
+            input="$input/VideoCanvas.app"
+          elif [[ "$PLATFORM" == linux-amd64 ]]; then
+            input="$input/VideoCanvas-linux"
+          fi
+          go run ./cmd/update-release package \
+            --platform "$PLATFORM" \
+            --input "$input" \
+            --output "../dist/VideoCanvas-${VERSION}-${PLATFORM}.zip"
+
+      - name: Install NSIS
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (!(Test-Path 'C:\Program Files (x86)\NSIS\makensis.exe')) { choco install nsis --no-progress -y; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
+
+      - name: Package native installer
+        shell: bash
+        run: python scripts/package-desktop-installer.py --platform '${{ matrix.platform }}'
+
+      - name: Verify native installer lifecycle
+        shell: bash
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          payload='backend/cmd/desktop/build/bin'
+          suffix='-setup.exe'
+          if [[ "$PLATFORM" == darwin-* ]]; then payload="$payload/VideoCanvas.app"; suffix='.dmg'; fi
+          if [[ "$PLATFORM" == linux-* ]]; then payload="$payload/VideoCanvas-linux"; suffix='.deb'; fi
+          command=(python scripts/smoke-desktop-installer.py --platform "$PLATFORM" --installer "dist/VideoCanvas-${VERSION}-${PLATFORM}${suffix}" --payload "$payload")
+          if [[ "$PLATFORM" == linux-* ]]; then xvfb-run -a dbus-run-session -- "${command[@]}"; else "${command[@]}"; fi
+
+      - name: Verify MCP from final packaged CLI
+        shell: bash
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          python scripts/smoke-packaged-cli_test.py
+          python scripts/smoke-packaged-cli.py --archive "dist/VideoCanvas-${VERSION}-${PLATFORM}.zip" --platform "$PLATFORM"
+
+      - name: Verify upgrades from released Windows clients
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: python scripts/test-windows-published-upgrade.py --archive "dist/VideoCanvas-${{ needs.preflight.outputs.version }}-windows-amd64.zip" --version "${{ needs.preflight.outputs.version }}" --output dist/windows-upgrade-evidence.json
+
+      - name: Verify Linux desktop window from final archive
+        if: runner.os == 'Linux'
+        run: xvfb-run -a dbus-run-session -- python3 scripts/smoke-linux-desktop.py --archive "dist/VideoCanvas-${{ needs.preflight.outputs.version }}-linux-amd64.zip"
+
+      - name: Preserve Windows upgrade acceptance
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-upgrade-evidence
+          path: dist/windows-upgrade-evidence.json
+
+      - name: Store platform zip for publication
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.platform }}
+          path: |
+            dist/VideoCanvas-${{ needs.preflight.outputs.version }}-${{ matrix.platform }}*
+            dist/VideoCanvas-${{ needs.preflight.outputs.version }}-ffprobe-${{ matrix.platform }}-sources.tar.gz
+          retention-days: 7
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: [preflight, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.preflight.outputs.version }}
+      COMMIT: ${{ needs.preflight.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache: true
+          cache-dependency-path: backend/go.sum
+
+      - name: Retrieve completed platform builds
+        uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          merge-multiple: true
+          path: dist
+
+      - name: Retrieve corresponding WASM source
+        uses: actions/download-artifact@v4
+        with:
+          name: media-wasm-source
+          path: dist
+
+      - name: Check complete platform set
+        run: |
+          set -euo pipefail
+          mapfile -t zips < <(find dist -maxdepth 1 -name "VideoCanvas-${VERSION}-*.zip" | LC_ALL=C sort)
+          if [[ "${#zips[@]}" -ne 4 ]]; then
+            echo "Expected 4 platform zips on draft $VERSION, found ${#zips[@]}."
+            printf '%s\n' "${zips[@]}"
+            exit 1
+          fi
+          for name in "darwin-arm64.dmg" "darwin-amd64.dmg" "windows-amd64-setup.exe" "linux-amd64.deb"; do
+            test -s "dist/VideoCanvas-${VERSION}-${name}"
+          done
+
+      - name: Publish signed GitHub release
+        run: |
+          set -euo pipefail
+          gh release upload "$VERSION" dist/VideoCanvas-"$VERSION"-*.zip dist/VideoCanvas-"$VERSION"-*.dmg dist/VideoCanvas-"$VERSION"-*-setup.exe dist/VideoCanvas-"$VERSION"-*.deb dist/VideoCanvas-"$VERSION"-ffprobe-darwin-*-sources.tar.gz dist/VideoCanvas-"$VERSION"-ffmpeg-wasm-sources.tar.gz
+          gh release edit "$VERSION" --draft=false --latest

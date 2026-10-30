@@ -1,0 +1,13 @@
+.skill-market-page .skill-market-toolbar { display: flex; gap: 12px; margin-bottom: 20px; }
+.skill-market-page .skill-market-toolbar .ant-input-search { max-width: 480px; }
+.skill-market-row { display: flex; align-items: flex-start; gap: 20px; padding: 20px 0; border-bottom: 1px solid var(--border); }
+.skill-market-copy { flex: 1; min-width: 0; }
+.skill-market-copy h2 { font-size: var(--fs-body); font-weight: 600; line-height: 1.6; overflow-wrap: anywhere; }
+.skill-market-copy h2 > span { font-size: var(--fs-label); font-weight: 400; color: var(--muted-foreground); }
+.skill-market-copy p { margin: 8px 0; line-height: 1.65; overflow-wrap: anywhere; }
+.skill-market-meta { display: flex; flex-wrap: wrap; gap: 12px; font-size: var(--fs-label); color: var(--muted-foreground); overflow-wrap: anywhere; }
+.skill-market-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.skill-market-help { margin: 24px 0; line-height: 1.8; color: var(--muted-foreground); }
+.skill-history-list { display: grid; gap: 8px; max-height: 50vh; overflow: auto; }
+.skill-history-option { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-sm); cursor: pointer; }
+@media (max-width: 640px) { .skill-market-row { flex-direction: column; gap: 12px; } }
