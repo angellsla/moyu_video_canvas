@@ -29,6 +29,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     outputs:
       version: ${{ steps.meta.outputs.version }}
+      existing_draft: ${{ steps.meta.outputs.existing_draft }}
     steps:
       - name: Require main branch
         run: |
@@ -84,17 +85,22 @@ jobs:
             "${greater_args[@]}"
 
           go run ./cmd/update-release changelog --file ../CHANGELOG.md --version "$version" > "$RUNNER_TEMP/release-notes.md"
-          if gh release view "$version" >/dev/null 2>&1; then
-            echo "GitHub release $version already exists. Published release assets are not overwritten."
-            echo "If a failed draft was never published, delete it and its tag only after confirming it was never public."
-            exit 1
+          existing_draft=false
+          if release_json="$(gh release view "$version" --json isDraft 2>/dev/null)"; then
+            if [[ "$(jq -r '.isDraft' <<< "$release_json")" != "true" ]]; then
+              echo "GitHub release $version is already published. Published release assets are not overwritten."
+              exit 1
+            fi
+            echo "Reusing existing draft release $version from an earlier interrupted run."
+            existing_draft=true
           fi
-          if git ls-remote --exit-code origin "refs/tags/$version" >/dev/null 2>&1; then
+          if [[ "$existing_draft" != true ]] && git ls-remote --exit-code origin "refs/tags/$version" >/dev/null 2>&1; then
             echo "Git tag $version already exists. Choose a new VERSION; published tags are not reused."
             exit 1
           fi
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "existing_draft=$existing_draft" >> "$GITHUB_OUTPUT"
 
       - name: Prepare release gate dependencies
         run: |
@@ -116,6 +122,7 @@ jobs:
           compression-level: 0
 
       - name: Create draft GitHub release
+        if: steps.meta.outputs.existing_draft != 'true'
         env:
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
@@ -315,5 +322,5 @@ jobs:
       - name: Publish signed GitHub release
         run: |
           set -euo pipefail
-          gh release upload "$VERSION" dist/VideoCanvas-"$VERSION"-*.zip dist/VideoCanvas-"$VERSION"-*.dmg dist/VideoCanvas-"$VERSION"-*-setup.exe dist/VideoCanvas-"$VERSION"-*.deb dist/VideoCanvas-"$VERSION"-ffprobe-darwin-*-sources.tar.gz dist/VideoCanvas-"$VERSION"-ffmpeg-wasm-sources.tar.gz
+          gh release upload "$VERSION" --clobber dist/VideoCanvas-"$VERSION"-*.zip dist/VideoCanvas-"$VERSION"-*.dmg dist/VideoCanvas-"$VERSION"-*-setup.exe dist/VideoCanvas-"$VERSION"-*.deb dist/VideoCanvas-"$VERSION"-ffprobe-darwin-*-sources.tar.gz dist/VideoCanvas-"$VERSION"-ffmpeg-wasm-sources.tar.gz
           gh release edit "$VERSION" --draft=false --latest
