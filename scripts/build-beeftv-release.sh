@@ -153,9 +153,29 @@ if [[ "$AGENT_TARGET" == linux/amd64 ]]; then
   exit 0
 fi
 
+# Wails uses the configured application name for the macOS bundle directory
+# (`墨羽Canvas.app`), while the release payload contract uses the stable
+# machine-facing name `VideoCanvas.app`. Normalize the directory before adding
+# resources or signing so every downstream packager sees the same bundle.
+APP_BUNDLE="$DESKTOP_DIR/build/bin/VideoCanvas.app"
+if [[ ! -d "$APP_BUNDLE" ]]; then
+  generated_bundle=""
+  generated_count=0
+  for candidate in "$DESKTOP_DIR/build/bin"/*.app; do
+    [[ -d "$candidate" ]] || continue
+    generated_bundle="$candidate"
+    generated_count=$((generated_count + 1))
+  done
+  if [[ "$generated_count" -ne 1 ]]; then
+    echo "Expected exactly one Wails macOS app bundle in $DESKTOP_DIR/build/bin" >&2
+    printf '%s\n' "$generated_bundle" >&2
+    exit 1
+  fi
+  mv "$generated_bundle" "$APP_BUNDLE"
+fi
+
 # Official protocol packages are runtime dependencies. Finder launches use the
 # bundle Resources directory and must never depend on the caller's cwd.
-APP_BUNDLE="$DESKTOP_DIR/build/bin/VideoCanvas.app"
 PLUGIN_RESOURCE_DIR="$APP_BUNDLE/Contents/Resources/plugin-packages"
 mkdir -p "$PLUGIN_RESOURCE_DIR"
 cp "$ROOT_DIR/plugin-packages/"*.beeftv-plugin "$PLUGIN_RESOURCE_DIR/"
@@ -168,9 +188,6 @@ bun "$ROOT_DIR/scripts/distribution-notices.mjs" "${AGENT_TARGET/\//-}" \
 # Reuse the explicitly supplied (or already installed) encoder, including its
 # license. The native workflow adapter must not rely on a Finder-launched PATH.
 ENCODER_SOURCE="${BEEFTV_FFMPEG_RUNTIME:-/Applications/VideoCanvas.app/Contents/Resources/agent-host/media-runtime/ffmpeg}"
-if [[ ! -x "$ENCODER_SOURCE" && -z "${BEEFTV_FFMPEG_RUNTIME:-}" ]]; then
-  ENCODER_SOURCE="/Applications/BeefTV.app/Contents/Resources/agent-host/media-runtime/ffmpeg"
-fi
 if [[ -x "$ENCODER_SOURCE" ]]; then
   ENCODER_LICENSE="${BEEFTV_FFMPEG_LICENSE:-$(dirname "$ENCODER_SOURCE")/ffmpeg.LICENSE}"
   [[ -f "$ENCODER_LICENSE" ]] || { echo "Encoder license missing: $ENCODER_LICENSE" >&2; exit 1; }
