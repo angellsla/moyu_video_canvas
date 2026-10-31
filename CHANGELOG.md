@@ -4,6 +4,10 @@ All notable public changes to the desktop workspace are documented in this file.
 
 ## Unreleased
 
+## v1.0.1
+
+- 修复项目画布中新建工作流时编辑器高度塌缩的问题。
+
 ## v1.0.0
 
 - 墨羽Canvas首个重置版本：侧栏不再显示安装版本号，应用内不再自动检查或安装更新；升级请从发布页手动下载安装包。
