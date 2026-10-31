@@ -4,6 +4,10 @@ All notable public changes to the desktop workspace are documented in this file.
 
 ## Unreleased
 
+## v1.0.2
+
+- New API 登录并同步模型后，默认文字模型设为 `gpt-6.1-sol`（仅在模型列表包含该模型时）。
+
 ## v1.0.1
 
 - 修复项目画布中新建工作流时编辑器高度塌缩的问题。

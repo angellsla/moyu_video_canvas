@@ -8,7 +8,7 @@ import { mergeFetchedChannelModelProfiles } from "@/lib/channel-model-catalog";
 import { seedancePortraitModel } from "@/lib/seedance-portrait";
 import { ensureModelProfilesWithUiDefaults } from "@/lib/model-protocols";
 import { fetchChannelModels, type ChannelModelFetchResult } from "@/services/api/image";
-import { channelHasGenerationCredential, filterModelsByCapability, modelOptionsFromChannels, normalizeConfigSnapshot, useConfigStore, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
+import { channelHasGenerationCredential, encodeChannelModel, filterModelsByCapability, modelOptionsFromChannels, normalizeConfigSnapshot, useConfigStore, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
 import { ModelServiceEditor } from "./model-service-editor";
 import { currentModelConnectionReceipt, useModelConnectionTests } from "@/stores/use-model-connection-tests";
 import { ModelLogo } from "@/components/model-logo";
@@ -89,7 +89,8 @@ export function ChannelSettingsPane({ onOpenDiagnostics, onOpenRunningHub }: Cha
             const channels = retained.some((item) => item.id === channel.id)
                 ? retained.map((item) => item.id === channel.id ? channel : item)
                 : [...retained, channel];
-            const normalized = normalizeConfigSnapshot({ config: { ...latest, channels } }).config;
+            const textModel = newAPITextModelAfterSync(models, latest.textModel);
+            const normalized = normalizeConfigSnapshot({ config: { ...latest, channels, textModel } }).config;
             updateChannels(normalized.channels, normalized);
             await flushModelConfig();
             const saved = getModelConfigPersistenceState();
@@ -400,6 +401,11 @@ export function applyFetchedChannelModelCatalog(channel: ModelChannel, result: C
         }).concat((channel.modelProfiles || []).filter((profile) => !profiles.some((item) => item.model === profile.model))
             .map((profile) => seedancePortraitModel(profile.model) ? { ...profile, videoPricing: null } : profile)),
     };
+}
+
+export function newAPITextModelAfterSync(models: string[], current: string) {
+    const preferredModel = "gpt-6.1-sol";
+    return models.includes(preferredModel) ? encodeChannelModel("newapi", preferredModel) : current;
 }
 
 function WorkflowChannelEntry({ icon, title, description, status, ready, onOpen }: { icon: ReactNode; title: string; description: string; status: string; ready: boolean; onOpen?: () => void }) {
