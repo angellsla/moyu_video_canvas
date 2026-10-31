@@ -150,7 +150,7 @@ export function CanvasWorkflowEditor({ initial, operations, canvasNodes, canvasC
     if (node?.videoDurationSourceNodeId && !durationSources.some(source => source.id === node.videoDurationSourceNodeId)) durationOptions.push({ value: node.videoDurationSourceNodeId, label: "来源已断开，请重新选择", disabled: true });
     const materials = node ? canvasNodes.filter(item => item.type === node.mediaType && canvasNodeResourceId(item)) : [];
     return <AppModal open flush closable={false} footer={null} width="min(1420px, calc(100vw - 32px))" onCancel={close} maskClosable={false} keyboard={!dirty && !saving}>
-        <section className="workflow-surface flex max-h-[90vh] flex-col" data-canvas-no-zoom data-canvas-no-drag data-canvas-wheel-scroll aria-label="工作流设定">
+        <section className="workflow-surface workflow-editor-surface flex flex-col" data-canvas-no-zoom data-canvas-no-drag data-canvas-wheel-scroll aria-label="工作流设定">
             <header className="flex flex-wrap items-center gap-3 border-b border-border px-5 py-4">
                 <h2 className="font-semibold">编辑工作流</h2>
                 <Input aria-label="编辑工作流名称" className="min-w-40 max-w-80 flex-1" maxLength={100} value={draft.name} disabled={readOnly || saving} onChange={event => commit(current => ({ ...current, name: event.target.value }))} />
@@ -166,7 +166,7 @@ export function CanvasWorkflowEditor({ initial, operations, canvasNodes, canvasC
             {error ? <Alert className="mx-4 mt-3" type="error" title={error} showIcon /> : null}
             {exitPending ? <Alert className="mx-4 mt-3" type="warning" title="尚有未保存的修改" action={<div className="flex gap-2"><Button size="small" onClick={() => { setExitPending(false); returnToCanvas.current = false; }}>继续编辑</Button><Button size="small" danger onClick={finishClose}>放弃修改</Button></div>} /> : null}
             {connecting ? <div className="flex items-center justify-between px-5 py-2 text-sm text-muted-foreground">已选「{definition.nodes.find(item => item.id === connecting)?.title}」输出，请点击目标节点的输入端口。<Button size="small" onClick={() => setConnecting(undefined)}>取消连线</Button></div> : null}
-            <div className="workflow-editor-layout overflow-hidden" style={{ height: "min(780px, 76vh)" }}>
+            <div className="workflow-editor-layout overflow-hidden">
                 <div className="workflow-editor-canvas relative flex min-h-0 min-w-0 flex-col">
                 {libraryOpen ? <aside className="workflow-editor-library flex flex-col gap-3 p-4 shadow-xl" aria-label="添加工作流节点">
                     <div className="flex items-center justify-between"><span className="font-medium">添加节点</span><Button type="text" size="small" aria-label="收起节点工具" icon={<X className="size-4" />} onClick={() => setLibraryOpen(false)} /></div>
