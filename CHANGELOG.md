@@ -4,6 +4,10 @@ All notable public changes to the desktop workspace are documented in this file.
 
 ## Unreleased
 
+## v1.0.3
+
+- 按模型目录精确分类指定的文本、图片和视频模型，并在刷新模型列表时纠正对应分类与调用协议。
+
 ## v1.0.2
 
 - New API 登录并同步模型后，默认文字模型设为 `gpt-6.1-sol`（仅在模型列表包含该模型时）。
