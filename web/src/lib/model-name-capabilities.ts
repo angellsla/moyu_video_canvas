@@ -1,0 +1,50 @@
+export type KnownModelCapability = "text" | "image" | "video";
+
+const MODEL_CAPABILITY_OVERRIDES: Record<string, KnownModelCapability> = {
+    "gpt-6.1-sol": "text",
+    "gpt-image-2.5-sunburst-k": "image",
+    "gemini-3.1-flash-image-preview": "image",
+    "gpt-image-2.5-flare-k": "image",
+    mj_imagine: "image",
+    "gpt-image-2.5-sunburst-4k-k": "image",
+    "gpt-image-2-4k": "image",
+    "gpt-image-2-4k-k": "image",
+    "gpt-image-2-k": "image",
+    "gpt-image-2.5-flare-4k-k": "image",
+    "wan3-pro-1": "video",
+    "sd-2.5-720p-15s": "video",
+    "seedance-2.0-nt-720": "video",
+    "grok-imagine-video-1.5": "video",
+    "gemini-nano-banana-2.1": "video",
+    "dola-2.5-720p": "video",
+    "seedance-2.0-gz": "video",
+    "sd-2.5-1080p": "video",
+    "seedance2.5-mrt-720p": "video",
+    "gpt-image-2.5-sunburst": "video",
+    "seedance2.5-gz-1080": "video",
+    "yk-seedance25-1080": "video",
+    "seedance-2.5-gz": "video",
+    "seedance-2.5-r4": "video",
+    "seedance-2.5-l2-720p": "video",
+    "seedance-2.5-pa-1080p": "video",
+    "seedance-2.5-pa-720p": "video",
+    "tr_seedance-2.0": "video",
+    "seedance-2.5-yy-720p": "video",
+    "wan3.0-video": "video",
+    "gpt-image-2.5-flare": "video",
+    "ntt-720p": "video",
+    "sd2.5-1080p": "video",
+    "2.0-933-720p": "video",
+    "seedance2.5-30s": "video",
+    "sd-2.0-720p": "video",
+    "tr_seedance-2.0_faceok": "video",
+    "seedance-2.0-nt-480": "video",
+    "wan3.0-smart2": "video",
+    "sd2.5-pp-720p": "video",
+    "wan3-pro": "video",
+};
+
+export function knownModelCapability(model: string): KnownModelCapability | undefined {
+    const name = model.split("::").pop()?.trim().toLowerCase() || "";
+    return MODEL_CAPABILITY_OVERRIDES[name];
+}

@@ -2,6 +2,7 @@ import { defaultModelCapabilityConfig, sanitizeServerImageCapability, sanitizeSe
 import { modelProtocolCapability, protocolForModelCatalog, type ModelProtocol } from "@/lib/model-protocols";
 import type { ModelChannel } from "@/stores/use-config-store";
 import { imageModelContract } from "@/lib/model-image-contracts";
+import { knownModelCapability } from "@/lib/model-name-capabilities";
 import { sanitizeVideoPriceQuote, seedancePortraitModel, type VideoPriceQuote } from "@/lib/seedance-portrait";
 
 export type ChannelModelCatalogOption = { value: string; label?: string };
@@ -85,6 +86,8 @@ export function catalogModelMapping(
         .trim()
         .toLowerCase();
     const endpoints = (item.supportedEndpointTypes || []).map((value) => value.trim().toLowerCase()).filter(Boolean);
+    const knownCapability = knownModelCapability(id);
+    if (knownCapability) return { capability: knownCapability };
     const imageContract = options.providerNameFallback ? imageModelContract(id) : undefined;
     if (imageContract) return { capability: "image", protocol: imageContract.protocol };
     if (endpoints.some((endpoint) => endpoint === "audio.transcriptions" || endpoint === "audio-transcriptions" || endpoint === "transcriptions")) {
@@ -140,9 +143,12 @@ export function mergeFetchedChannelModelProfiles(channel: ModelChannel, catalog:
         // Known model contracts are provider-neutral.  This is important for
         // New API/custom channels whose catalog may expose only model IDs.
         const mapped = catalogModelMapping(item, { providerNameFallback: true });
-        const inferredProtocol = mapped.protocol || protocolForModelCatalog(item.supportedEndpointTypes);
+        const knownCapability = knownModelCapability(item.id);
+        const inferredProtocol = knownCapability
+            ? protocolTemplateForNewCatalogModel(knownCapability, channel.interfaceType)
+            : mapped.protocol || protocolForModelCatalog(item.supportedEndpointTypes);
         const catalogVideo = sanitizeServerVideoCapability(item.videoCapabilities);
-        const inferredCapability = mapped.capability || modelProtocolCapability(inferredProtocol) || item.modelType || (catalogVideo ? "video" : undefined);
+        const inferredCapability = knownCapability || mapped.capability || modelProtocolCapability(inferredProtocol) || item.modelType || (catalogVideo ? "video" : undefined);
         const sourcedImage = inferredCapability === "image" && item.imageCapabilitiesVersion ? sanitizeServerImageCapability(item.imageCapabilities) : null;
         if (mapped.skipGeneration) {
             continue;

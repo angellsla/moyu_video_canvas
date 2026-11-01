@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } fro
 import { WorkspaceState } from "@/components/layout/workspace-state";
 import { PageHeader } from "@/components/layout/workspace-page";
 import { mergeFetchedChannelModelProfiles } from "@/lib/channel-model-catalog";
+import { knownModelCapability } from "@/lib/model-name-capabilities";
 import { seedancePortraitModel } from "@/lib/seedance-portrait";
 import { ensureModelProfilesWithUiDefaults } from "@/lib/model-protocols";
 import { fetchChannelModels, type ChannelModelFetchResult } from "@/services/api/image";
@@ -397,6 +398,16 @@ export function applyFetchedChannelModelCatalog(channel: ModelChannel, result: C
             const previous = existing.get(profile.model);
             if (!previous) return profile;
             if (seedancePortraitModel(profile.model)) return { ...previous, videoPricing: profile.videoPricing ?? null };
+            if (knownModelCapability(profile.model)) {
+                const capabilityChanged = previous.capability !== profile.capability;
+                return {
+                    ...previous,
+                    capability: profile.capability,
+                    protocol: profile.protocol,
+                    ...(capabilityChanged ? { capabilityConfig: profile.capabilityConfig } : {}),
+                    ...(profile.videoPricing ? { videoPricing: profile.videoPricing } : {}),
+                };
+            }
             return profile.videoPricing ? { ...previous, videoPricing: profile.videoPricing } : previous;
         }).concat((channel.modelProfiles || []).filter((profile) => !profiles.some((item) => item.model === profile.model))
             .map((profile) => seedancePortraitModel(profile.model) ? { ...profile, videoPricing: null } : profile)),

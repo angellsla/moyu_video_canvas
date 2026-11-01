@@ -12,6 +12,7 @@ import { defaultModelCapabilityConfig, upgradeGPTImageCapability, workflowFieldR
 import { useUserStore } from "@/stores/use-user-store";
 import type { CapabilitySpec } from "@/services/api/logical-models";
 import { seedancePortraitLabel, seedancePortraitModel, type VideoPriceQuote } from "@/lib/seedance-portrait";
+import { knownModelCapability } from "@/lib/model-name-capabilities";
 
 export type ApiCallFormat = "openai" | "gemini" | "claude";
 export type ChannelInterfaceType = ModelProtocol;
@@ -498,6 +499,8 @@ export type ConfigStoreSnapshot = {
 };
 
 function isVideoModelName(model: string) {
+    const knownCapability = knownModelCapability(model);
+    if (knownCapability) return knownCapability === "video";
     const value = modelOptionName(model).toLowerCase();
     return (
         value.includes("seedance") ||
@@ -527,6 +530,8 @@ function isVideoModelName(model: string) {
 }
 
 function isImageModelName(model: string) {
+    const knownCapability = knownModelCapability(model);
+    if (knownCapability) return knownCapability === "image";
     const value = modelOptionName(model).toLowerCase();
     return (
         !isVideoModelName(model) &&
@@ -567,6 +572,8 @@ function isAudioModelName(model: string) {
 }
 
 function isTextModelName(model: string) {
+    const knownCapability = knownModelCapability(model);
+    if (knownCapability) return knownCapability === "text";
     return !isImageModelName(model) && !isVideoModelName(model) && !isAudioModelName(model) && !isTranscriptionModelName(model);
 }
 
@@ -890,11 +897,12 @@ function enrichNewAPIChannel(channel: ModelChannel): ModelChannel {
     const existing = new Map((channel.modelProfiles || []).map((item) => [item.model, item]));
     for (const model of models.filter(isImageModelName)) {
         const current = existing.get(model);
-        if (current?.imageCapabilitiesVersion && current.capabilityConfig?.image) continue;
-        // A New API image model may have been stored with an old text default.
-        // Do not rewrite a non-text protocol deliberately configured by user.
+        const explicitImageOverride = knownModelCapability(model) === "image";
+        if (!explicitImageOverride && current?.imageCapabilitiesVersion && current.capabilityConfig?.image) continue;
+        // New API catalogs may return ID-only entries or stale text profiles.
+        // Explicit model mappings take priority over the imported profile type.
         const contract = imageModelContract(model);
-        const staleTextProtocol = (/^(gpt-image(?:-|$)|dall-e(?:-|$))/i.test(model) || Boolean(contract)) && modelProtocolCapability(current?.protocol) === "text";
+        const staleTextProtocol = (/^(gpt-image(?:-|$)|dall-e(?:-|$))/i.test(model) || Boolean(contract) || explicitImageOverride) && modelProtocolCapability(current?.protocol) !== "image";
         const protocol = contract?.protocol || (staleTextProtocol ? "openai-image" : current?.protocol || "openai-image");
         const capabilityConfig = contract ? defaultModelCapabilityConfig(contract.protocol, model) : current?.capabilityConfig || defaultModelCapabilityConfig(protocol, model);
         existing.set(model, {
@@ -907,13 +915,14 @@ function enrichNewAPIChannel(channel: ModelChannel): ModelChannel {
     }
     for (const model of models.filter(isTextModelName)) {
         const current = existing.get(model);
-        if (current?.capability && current.capability !== "text") continue;
-        if (current?.protocol && modelProtocolCapability(current.protocol) !== "text") continue;
+        const explicitTextOverride = knownModelCapability(model) === "text";
+        if (!explicitTextOverride && current?.capability && current.capability !== "text") continue;
+        if (!explicitTextOverride && current?.protocol && modelProtocolCapability(current.protocol) !== "text") continue;
         existing.set(model, {
             ...(current || {}),
             model,
             capability: "text",
-            protocol: current?.protocol || "chat-completion",
+            protocol: explicitTextOverride && modelProtocolCapability(current?.protocol) !== "text" ? "chat-completion" : current?.protocol || "chat-completion",
         });
     }
     for (const model of models.filter(isAudioModelName)) {
