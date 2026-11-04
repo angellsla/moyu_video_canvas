@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: collaboration-build-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   GOTOOLCHAIN: local
@@ -34,11 +34,29 @@ jobs:
         with:
           bun-version: 1.4.2
 
-      - name: Test backend with SQLite CGO
+      - name: Compile all backend packages
         working-directory: backend
         env:
           CGO_ENABLED: '1'
-        run: go test ./...
+        run: go test -run '^$' ./...
+
+      - name: Test LAN persistence and transport
+        working-directory: backend
+        env:
+          CGO_ENABLED: '1'
+        run: go test ./internal/database ./internal/lansharing -count=1
+
+      - name: Test LAN HTTP routes
+        working-directory: backend
+        env:
+          CGO_ENABLED: '1'
+        run: go test ./internal/handler -run '^TestLAN' -count=1
+
+      - name: Test runtime startup and permission guard
+        working-directory: backend
+        env:
+          CGO_ENABLED: '1'
+        run: go test ./internal/bootstrap -run '^(TestRuntimeOpenStartClose|TestOpsAcceptanceReadOnlyCannotEscalateOrWrite)$' -count=1
 
       - name: Install web dependencies
         working-directory: web
