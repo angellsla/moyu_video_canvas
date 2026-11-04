@@ -331,6 +331,39 @@ paths:
         "200": { description: 信封 data.asset 含 SHA-256 与资产元数据 }
         "400": { description: 资源未就绪、非本地归属或大小超出限制 }
         "404": { description: 清单或资源不存在 }
+  /lan-sharing/catalogs/{catalogId}/assets/status:
+    get:
+      tags: [lan-sharing]
+      summary: 查询当前桌面工作区的本机共享素材文件状态
+      description: 桌面应用启动时和随后每 5 分钟巡检文件存在性，与共享服务开关无关；状态不是持续的完整内容哈希校验，也不证明远端设备仍持有文件。
+      parameters:
+        - in: path
+          name: catalogId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: 信封 data.assets 为本机素材映射的文件状态
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code: { type: integer, example: 0 }
+                  data:
+                    type: object
+                    properties:
+                      assets:
+                        type: array
+                        items:
+                          type: object
+                          required: [contentHash, resourceId, availability]
+                          properties:
+                            contentHash: { type: string, pattern: "^[a-f0-9]{64}$" }
+                            resourceId: { type: string }
+                            availability: { type: string, enum: [present, missing, unknown] }
+                            checkedAt: { type: string, format: date-time, nullable: true }
+        "404": { description: 共享清单不存在 }
   /lan-sharing/catalogs/{catalogId}/assets/import:
     post:
       tags: [lan-sharing]

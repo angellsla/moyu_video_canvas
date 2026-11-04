@@ -192,6 +192,8 @@ MiniMax speech 的 OpenAI 音频兼容目录通过 `audioOptions` 提供官方�
 
 `POST /lan-sharing/catalogs/:catalogId/assets` 接收当前用户拥有的本地 `resourceId`，读取本地资源、计算 SHA-256 并建立本机清单映射；`POST /lan-sharing/catalogs/:catalogId/assets/import` 接收 `{peerId,address,port,contentHash,name,mimeType,size}`，后端与受信任 peer 建立指纹固定 TLS 连接，流式接收内容并核对长度与 SHA-256，再通过现有资源服务创建接收端自己的本地资源记录。不受信任的对端返回 403、对端资产缺失返回 404、连接或内容校验失败返回 502。清单记录不携带发送端资源 ID 或路径；清单存在不代表任何 peer 当前在线或持有该资产，来源离线或没有本地映射时导入会失败。
 
+`GET /lan-sharing/catalogs/:catalogId/assets/status` 返回当前桌面工作区在该清单中的本机映射状态 `{assets:[{contentHash,resourceId,availability,checkedAt}]}`，`availability` 为 `present`、`missing` 或 `unknown`，未检查时 `checkedAt` 为 `null`。桌面应用启动时检查本机文件，随后每 5 分钟巡检一次，与共享服务开关无关；确认文件缺失才标为 `missing`，临时读取故障保留 `unknown`，不会删除清单条目或资源记录。`present` 只证明巡检时文件存在，不是每次都重新计算 SHA-256，也不保证其他设备仍持有文件。共享清单中 `createdBy` 仅表示发布该条目的设备声明，不是对端文件实时可用的证明。
+
 ### 素材与操作
 
 素材保存和批量同步会去除 `id` 首尾空白；未提供或仅含空白时生成 ID。数据库记录与返回素材文档使用同一个 ID，客户端后续更新应沿用该 ID。未识别的扩展字段和 `metadata.favorite` 会保留。

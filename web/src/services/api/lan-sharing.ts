@@ -47,6 +47,13 @@ export type LanSharingAsset = {
     parentId?: string;
 };
 
+export type LanSharingAssetStatus = {
+    contentHash: string;
+    resourceId: string;
+    availability: "present" | "missing" | "unknown";
+    checkedAt?: string | null;
+};
+
 const BASE_PATH = "/lan-sharing";
 
 export function getLanSharingStatus() {
@@ -97,6 +104,10 @@ export function listLocalSharingResources() {
 
 export function addLanSharingCatalogAsset(catalogId: string, resourceId: string) {
     return http.post<{ asset: LanSharingAsset }>(`${BASE_PATH}/catalogs/${encodeURIComponent(catalogId)}/assets`, { resourceId });
+}
+
+export function getLanSharingCatalogAssetStatuses(catalogId: string) {
+    return http.get<{ assets: LanSharingAssetStatus[] }>(`${BASE_PATH}/catalogs/${encodeURIComponent(catalogId)}/assets/status`);
 }
 
 export function importLanSharingCatalogAsset(catalogId: string, input: {

@@ -36,25 +36,27 @@ import (
 )
 
 type Runtime struct {
-	workspaceLock    *os.File
-	cfg              Config
-	db               *gorm.DB
-	service          *app.Service
-	localApp         *localapp.App
-	handler          http.Handler
-	status           *systemStatus
-	launchToken      string
-	uiBootstrapToken string
-	assistantHost    *assistantruntime.Host
-	lanSharing       *lansharing.Manager
-	listener         net.Listener
-	httpServer       *http.Server
-	serveErr         chan error
-	started          atomic.Bool
-	closed           atomic.Bool
-	closeOnce        sync.Once
-	backgroundDone   chan struct{}
-	closeErr         error
+	workspaceLock      *os.File
+	cfg                Config
+	db                 *gorm.DB
+	service            *app.Service
+	localApp           *localapp.App
+	handler            http.Handler
+	status             *systemStatus
+	launchToken        string
+	uiBootstrapToken   string
+	assistantHost      *assistantruntime.Host
+	lanSharing         *lansharing.Manager
+	lanAssetScanCancel context.CancelFunc
+	lanAssetScanDone   chan struct{}
+	listener           net.Listener
+	httpServer         *http.Server
+	serveErr           chan error
+	started            atomic.Bool
+	closed             atomic.Bool
+	closeOnce          sync.Once
+	backgroundDone     chan struct{}
+	closeErr           error
 }
 
 func Open(_ context.Context, raw Config) (result *Runtime, openErr error) {
@@ -358,6 +360,15 @@ func (r *Runtime) Start() error {
 	} else {
 		r.service.StartWorker()
 	}
+	if r.cfg.Profile == ProfileDesktop {
+		scanCtx, cancel := context.WithCancel(context.Background())
+		r.lanAssetScanCancel = cancel
+		r.lanAssetScanDone = make(chan struct{})
+		go func() {
+			defer close(r.lanAssetScanDone)
+			canvasHandler.RunLANAssetScan(scanCtx, r.service)
+		}()
+	}
 	r.backgroundDone = make(chan struct{})
 	go func() {
 		defer close(r.backgroundDone)
@@ -439,6 +450,14 @@ func (r *Runtime) Close(ctx context.Context) error {
 		if r.assistantHost != nil {
 			if err := r.assistantHost.StopContext(ctx); err != nil {
 				failures = append(failures, err)
+			}
+		}
+		if r.lanAssetScanCancel != nil {
+			r.lanAssetScanCancel()
+			select {
+			case <-r.lanAssetScanDone:
+			case <-ctx.Done():
+				failures = append(failures, fmt.Errorf("等待局域网素材巡检退出: %w", ctx.Err()))
 			}
 		}
 		if r.lanSharing != nil {

@@ -11,8 +11,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"infinite-canvas/backend/internal/app"
 	"infinite-canvas/backend/internal/database"
@@ -142,6 +144,134 @@ func TestLANAssetTransferErrorsMatchPeerStatusContract(t *testing.T) {
 				t.Fatalf("status = %d, want %d: %s", response.Code, test.want, response.Body.String())
 			}
 		})
+	}
+}
+
+func TestLANAssetScanTracksMissingAndRestoredFile(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	service, db, manager := newLANAssetHandlerFixture(t)
+	owner, err := service.LocalWorkspaceOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.LANShareCatalog{ID: "catalog-scan", Name: "Shared"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("asset scan fixture")
+	resource, err := service.UploadLocalResourceFile(owner.ID, "source.bin", int64(len(content)), "file", 0, 0, 0, bytes.NewReader(content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(content)
+	hash := hex.EncodeToString(digest[:])
+	h := &lanAssetHandler{manager: manager, service: service, db: db}
+	if err := h.saveCatalogResource(context.Background(), "catalog-scan", hash, owner.ID, resource.ID, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	assertStatus := func(want string) {
+		t.Helper()
+		if err := scanLANAssetsOnce(context.Background(), service); err != nil {
+			t.Fatal(err)
+		}
+		var row model.LANCatalogResource
+		if err := db.First(&row, "catalog_id = ? AND content_hash = ? AND user_id = ?", "catalog-scan", hash, owner.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if row.Availability != want || row.CheckedAt == nil {
+			t.Fatalf("availability = %q, checkedAt = %v, want %q", row.Availability, row.CheckedAt, want)
+		}
+	}
+	assertStatus(lanAssetPresent)
+	path := filepath.Join(service.DataDir(), "resources", filepath.FromSlash(resource.ObjectKey))
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	assertStatus(lanAssetMissing)
+	request := httptest.NewRequest(http.MethodGet, "/catalogs/catalog-scan/assets/status", nil)
+	response := httptest.NewRecorder()
+	router := gin.New()
+	router.GET("/catalogs/:catalogId/assets/status", h.assetStatuses)
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status endpoint = %d: %s", response.Code, response.Body.String())
+	}
+	var envelope struct {
+		Data struct {
+			Assets []struct {
+				ContentHash  string     `json:"contentHash"`
+				ResourceID   string     `json:"resourceId"`
+				Availability string     `json:"availability"`
+				CheckedAt    *time.Time `json:"checkedAt"`
+			} `json:"assets"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Data.Assets) != 1 || envelope.Data.Assets[0].ContentHash != hash || envelope.Data.Assets[0].ResourceID != resource.ID || envelope.Data.Assets[0].Availability != lanAssetMissing || envelope.Data.Assets[0].CheckedAt == nil {
+		t.Fatalf("status response = %+v", envelope.Data.Assets)
+	}
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	assertStatus(lanAssetPresent)
+}
+
+func TestLANAssetScanKeepsTransientProbeFailureUnknown(t *testing.T) {
+	service, db, _ := newLANAssetHandlerFixture(t)
+	owner, err := service.LocalWorkspaceOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.LANShareCatalog{ID: "catalog-unknown", Name: "Shared"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	row := model.LANCatalogResource{CatalogID: "catalog-unknown", HashAlgorithm: "sha256", ContentHash: string(bytes.Repeat([]byte("a"), 64)), UserID: owner.ID, ResourceID: "unreadable", VerifiedAt: time.Now().UTC(), Availability: lanAssetPresent}
+	if err := db.Create(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := scanLANAssetsOnceWithProbe(context.Background(), service, func(context.Context, *app.Service, string, *model.LANCatalogResource) string {
+		return lanAssetUnknown
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var got model.LANCatalogResource
+	if err := db.First(&got, "catalog_id = ? AND content_hash = ? AND user_id = ?", row.CatalogID, row.ContentHash, owner.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Availability != lanAssetUnknown || got.CheckedAt == nil || got.ResourceID != row.ResourceID {
+		t.Fatalf("transient probe changed mapping incorrectly: %+v", got)
+	}
+}
+
+func TestLANAssetRecoveryUploadDoesNotReuseMissingReadyResource(t *testing.T) {
+	service, _, _ := newLANAssetHandlerFixture(t)
+	owner, err := service.LocalWorkspaceOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("recovery fixture bytes")
+	digest := sha256.Sum256(content)
+	hash := hex.EncodeToString(digest[:])
+	identity := "lan-share:catalog-recovery:" + hash
+	original, err := service.UploadLocalResourceFile(owner.ID, "source.bin", int64(len(content)), "file", 0, 0, 0, bytes.NewReader(content), identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(service.DataDir(), "resources", filepath.FromSlash(original.ObjectKey))
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := service.UploadLocalResourceFile(owner.ID, "source.bin", int64(len(content)), "file", 0, 0, 0, bytes.NewReader(content), identity+":recovery:test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.ID == original.ID {
+		t.Fatal("recovery reused the READY record whose bytes are missing")
+	}
+	actual, err := hashOwnedLocalResource(context.Background(), service, owner.ID, recovered, int64(len(content)+1))
+	if err != nil || actual != hash {
+		t.Fatalf("recovered resource hash = %q, err = %v, want %q", actual, err, hash)
 	}
 }
 

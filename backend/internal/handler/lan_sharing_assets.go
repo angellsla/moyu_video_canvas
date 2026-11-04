@@ -86,6 +86,7 @@ func RegisterLANAssetRoutes(api *gin.RouterGroup, manager *lansharing.Manager, s
 	})
 	routes.POST("/catalogs/:catalogId/assets", handler.addAsset)
 	routes.POST("/catalogs/:catalogId/assets/import", handler.importAsset)
+	routes.GET("/catalogs/:catalogId/assets/status", handler.assetStatuses)
 }
 
 // RegisterLANAssetPeerHandler must run before the LAN Manager starts. The
@@ -224,18 +225,34 @@ func (h *lanAssetHandler) importAsset(c *gin.Context) {
 		"catalog_id = ? AND hash_algorithm = ? AND content_hash = ? AND user_id = ?",
 		catalogID, "sha256", contentHash, owner.ID,
 	).First(&existing).Error
+	replacingMissing := false
 	if lookupErr == nil {
-		resource, resourceErr := h.service.Resource(owner.ID, existing.ResourceID)
-		if resourceErr == nil && readyLocalResource(resource, owner.ID) && resource.Size == request.Size && safeMIMEType(resource.MimeType) == request.MIMEType && (request.Kind == "" || resource.Kind == request.Kind) {
+		switch inspectLANAsset(c.Request.Context(), h.service, owner.ID, &existing) {
+		case lanAssetMissing:
+			replacingMissing = true
+		case lanAssetUnknown:
+			fail(c, http.StatusServiceUnavailable, app.NewAppError(http.StatusServiceUnavailable, "本地映射素材状态暂时无法确认"))
+			return
+		default:
+			resource, resourceErr := h.service.Resource(owner.ID, existing.ResourceID)
+			if resourceErr != nil {
+				failInternal(c, http.StatusInternalServerError, resourceErr)
+				return
+			}
+			if !readyLocalResource(resource, owner.ID) || resource.Size != request.Size || safeMIMEType(resource.MimeType) != request.MIMEType || (request.Kind != "" && resource.Kind != request.Kind) {
+				fail(c, http.StatusConflict, app.NewAppError(http.StatusConflict, "本地映射素材与清单元数据不一致"))
+				return
+			}
 			actualHash, hashErr := hashOwnedLocalResource(c.Request.Context(), h.service, owner.ID, resource, maxBytes)
 			if hashErr == nil && actualHash == contentHash && !existing.VerifiedAt.IsZero() {
 				ok(c, gin.H{"resource": localAssetResourceSummary(resource)})
 				return
 			}
+			if errors.Is(hashErr, os.ErrNotExist) {
+				replacingMissing = true
+				break
+			}
 			fail(c, http.StatusConflict, app.NewAppError(http.StatusConflict, "本地映射素材未通过内容校验"))
-			return
-		} else {
-			fail(c, http.StatusConflict, app.NewAppError(http.StatusConflict, "本地映射素材不可用"))
 			return
 		}
 	} else if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
@@ -310,9 +327,14 @@ func (h *lanAssetHandler) importAsset(c *gin.Context) {
 	if request.DurationMs > 0 {
 		durationMs = request.DurationMs
 	}
+	uploadIdentity := "lan-share:" + catalogID + ":" + contentHash
+	if replacingMissing {
+		// The previous READY resource may still own the deterministic upload key.
+		uploadIdentity += ":recovery:" + kernel.NewID()
+	}
 	resource, err := h.service.UploadLocalResourceFile(
 		owner.ID, name, metadata.Size, kind, width, height, durationMs,
-		temporary, "lan-share:"+catalogID+":"+contentHash,
+		temporary, uploadIdentity,
 	)
 	closeErr := temporary.Close()
 	if err == nil && closeErr != nil {
@@ -326,11 +348,53 @@ func (h *lanAssetHandler) importAsset(c *gin.Context) {
 		failInternal(c, http.StatusInternalServerError, errors.New("imported LAN resource did not become ready"))
 		return
 	}
+	actualHash, err := hashOwnedLocalResource(c.Request.Context(), h.service, owner.ID, resource, maxBytes)
+	if err != nil || actualHash != contentHash {
+		failInternal(c, http.StatusInternalServerError, fmt.Errorf("imported LAN resource failed final verification: %v", err))
+		return
+	}
 	if err := h.saveCatalogResource(c.Request.Context(), catalogID, contentHash, owner.ID, resource.ID, time.Now().UTC()); err != nil {
 		failInternal(c, http.StatusInternalServerError, err)
 		return
 	}
 	ok(c, gin.H{"resource": localAssetResourceSummary(resource)})
+}
+
+func (h *lanAssetHandler) assetStatuses(c *gin.Context) {
+	catalogID := strings.TrimSpace(c.Param("catalogId"))
+	if !validLANCatalogID(catalogID) {
+		fail(c, http.StatusBadRequest, app.BadAuthRequest("共享清单标识无效"))
+		return
+	}
+	if err := h.requireCatalog(c.Request.Context(), catalogID); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			fail(c, http.StatusNotFound, app.NotFound("共享清单不存在"))
+		} else {
+			failInternal(c, http.StatusInternalServerError, err)
+		}
+		return
+	}
+	owner, err := h.localOwner()
+	if err != nil {
+		failService(c, err)
+		return
+	}
+	var rows []model.LANCatalogResource
+	if err := h.db.WithContext(c.Request.Context()).Where("catalog_id = ? AND user_id = ?", catalogID, owner.ID).
+		Order("content_hash").Find(&rows).Error; err != nil {
+		failInternal(c, http.StatusInternalServerError, err)
+		return
+	}
+	assets := make([]gin.H, 0, len(rows))
+	for _, row := range rows {
+		availability := row.Availability
+		if availability != lanAssetPresent && availability != lanAssetMissing {
+			availability = lanAssetUnknown
+		}
+		asset := gin.H{"contentHash": row.ContentHash, "resourceId": row.ResourceID, "availability": availability, "checkedAt": row.CheckedAt}
+		assets = append(assets, asset)
+	}
+	ok(c, gin.H{"assets": assets})
 }
 
 func writeLANAssetTransferError(c *gin.Context, err error) {
@@ -434,11 +498,12 @@ func (h *lanAssetHandler) localOwner() (*model.User, error) {
 func (h *lanAssetHandler) saveCatalogResource(ctx context.Context, catalogID, contentHash, userID, resourceID string, verifiedAt time.Time) error {
 	row := model.LANCatalogResource{
 		CatalogID: catalogID, HashAlgorithm: "sha256", ContentHash: contentHash,
-		UserID: userID, ResourceID: resourceID, VerifiedAt: verifiedAt, CreatedAt: verifiedAt, UpdatedAt: verifiedAt,
+		UserID: userID, ResourceID: resourceID, VerifiedAt: verifiedAt, Availability: lanAssetPresent,
+		CheckedAt: &verifiedAt, CreatedAt: verifiedAt, UpdatedAt: verifiedAt,
 	}
 	return h.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "catalog_id"}, {Name: "hash_algorithm"}, {Name: "content_hash"}, {Name: "user_id"}},
-		DoUpdates: clause.Assignments(map[string]any{"resource_id": resourceID, "verified_at": verifiedAt, "updated_at": verifiedAt}),
+		DoUpdates: clause.Assignments(map[string]any{"resource_id": resourceID, "verified_at": verifiedAt, "availability": lanAssetPresent, "checked_at": verifiedAt, "updated_at": verifiedAt}),
 	}).Create(&row).Error
 }
 

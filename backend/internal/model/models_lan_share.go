@@ -47,14 +47,16 @@ type LANCatalogYjsUpdate struct {
 // LANCatalogResource maps a verified shared content identity to a normal,
 // locally owned resource. It does not change Resource ownership semantics.
 type LANCatalogResource struct {
-	CatalogID     string    `json:"catalogId" gorm:"primaryKey;size:36"`
-	HashAlgorithm string    `json:"hashAlgorithm" gorm:"primaryKey;size:16"`
-	ContentHash   string    `json:"contentHash" gorm:"primaryKey;size:128"`
-	UserID        string    `json:"userId" gorm:"primaryKey;size:36;index"`
-	ResourceID    string    `json:"resourceId" gorm:"size:36;not null;index"`
-	VerifiedAt    time.Time `json:"verifiedAt"`
-	CreatedAt     time.Time `json:"createdAt"`
-	UpdatedAt     time.Time `json:"updatedAt"`
+	CatalogID     string     `json:"catalogId" gorm:"primaryKey;size:36"`
+	HashAlgorithm string     `json:"hashAlgorithm" gorm:"primaryKey;size:16"`
+	ContentHash   string     `json:"contentHash" gorm:"primaryKey;size:128"`
+	UserID        string     `json:"userId" gorm:"primaryKey;size:36;index"`
+	ResourceID    string     `json:"resourceId" gorm:"size:36;not null;index"`
+	VerifiedAt    time.Time  `json:"verifiedAt"`
+	Availability  string     `json:"availability" gorm:"size:16;not null;default:unknown"`
+	CheckedAt     *time.Time `json:"checkedAt,omitempty"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	UpdatedAt     time.Time  `json:"updatedAt"`
 }
 
 // LANCollaborationCanvas is a shared canvas room. It is independent from a

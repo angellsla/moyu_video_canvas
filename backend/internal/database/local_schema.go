@@ -15,7 +15,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const CurrentSchemaVersion int64 = 30
+const CurrentSchemaVersion int64 = 31
 
 type localSchemaMigration struct {
 	Version   int64 `gorm:"primaryKey;autoIncrement:false"`
@@ -149,6 +149,17 @@ func canonicalLocalMigrations() []localMigration {
 		}},
 		{version: 30, name: "lan-collaboration-canvases", apply: func(tx *gorm.DB) error {
 			return tx.AutoMigrate(&model.LANCollaborationCanvas{}, &model.LANCollaborationCanvasYjsUpdate{})
+		}},
+		{version: 31, name: "lan-catalog-resource-availability", apply: func(tx *gorm.DB) error {
+			for _, column := range []struct{ name, def string }{
+				{"availability", "TEXT NOT NULL DEFAULT 'unknown'"},
+				{"checked_at", "DATETIME"},
+			} {
+				if err := ensureSQLiteColumn(tx, "lan_catalog_resources", column.name, column.def); err != nil {
+					return err
+				}
+			}
+			return nil
 		}},
 	}
 }

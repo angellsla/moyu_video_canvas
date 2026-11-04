@@ -9,6 +9,7 @@ import {
     addLanSharingCatalogAsset,
     createLanSharingCatalog,
     decodeLanSharingUpdate,
+    getLanSharingCatalogAssetStatuses,
     getLanSharingCatalogUpdates,
     getLanSharingCatalogs,
     getLanSharingPeers,
@@ -22,6 +23,7 @@ import {
     startLanSharing,
     stopLanSharing,
     type LanSharingAsset,
+    type LanSharingAssetStatus,
     type LanSharingCatalog,
     type LanSharingPeer,
     type LanSharingStatus,
@@ -48,6 +50,12 @@ function pairingExpiry(value?: string) {
     if (!value) return "";
     const timestamp = Date.parse(value);
     return Number.isNaN(timestamp) ? "" : `有效期至 ${new Date(timestamp).toLocaleString()}`;
+}
+
+function assetCheckTime(value: string | null | undefined) {
+    if (!value) return "尚未检查";
+    const timestamp = Date.parse(value);
+    return Number.isNaN(timestamp) ? "尚未检查" : `上次检查 ${new Date(timestamp).toLocaleString()}`;
 }
 
 function formatBytes(bytes: number) {
@@ -127,7 +135,8 @@ export function LanSharingPane() {
     const [catalogs, setCatalogs] = useState<LanSharingCatalog[]>([]);
     const [resources, setResources] = useState<RemoteResource[]>([]);
     const [entriesByCatalog, setEntriesByCatalog] = useState<Record<string, CatalogEntry[]>>({});
-    const [resourceBindings, setResourceBindings] = useState<ResourceBindings>({});
+    const [assetStatuses, setAssetStatuses] = useState<Record<string, LanSharingAssetStatus[]>>({});
+    const [assetStatusError, setAssetStatusError] = useState("");
     const [resourceBindingsLoading, setResourceBindingsLoading] = useState(true);
     const [catalogName, setCatalogName] = useState("");
     const [resourceByCatalog, setResourceByCatalog] = useState<Record<string, string>>({});
@@ -165,19 +174,35 @@ export function LanSharingPane() {
     useEffect(() => {
         let active = true;
         bindingsRef.current = {};
-        setResourceBindings({});
+        setAssetStatuses({});
+        setAssetStatusError("");
         setResourceBindingsLoading(true);
         void Promise.resolve(localForageStorageForScope(scope).getItem(LOCAL_RESOURCE_BINDINGS_KEY)).then((raw) => {
             if (!active) return;
             const bindings = parseBindings(raw);
             bindingsRef.current = bindings;
-            setResourceBindings(bindings);
         }).catch((error) => {
             if (active) setActionError(errorMessage(error));
         }).finally(() => {
             if (active) setResourceBindingsLoading(false);
         });
         return () => { active = false; };
+    }, [scope]);
+
+    const refreshAssetStatuses = useCallback(async (catalogIds: string[]) => {
+        if (!catalogIds.length) {
+            setAssetStatuses({});
+            setAssetStatusError("");
+            return;
+        }
+        const results = await Promise.allSettled(catalogIds.map((catalogId) => getLanSharingCatalogAssetStatuses(catalogId)));
+        if (scopeRef.current !== scope) return;
+        const received: Record<string, LanSharingAssetStatus[]> = {};
+        results.forEach((result, index) => {
+            if (result.status === "fulfilled") received[catalogIds[index]] = result.value.assets;
+        });
+        if (Object.keys(received).length) setAssetStatuses((current) => ({ ...current, ...received }));
+        setAssetStatusError(results.some((result) => result.status === "rejected") ? "部分本机资产检查状态暂不可用" : "");
     }, [scope]);
 
     const refresh = useCallback(async (initial = false) => {
@@ -197,13 +222,14 @@ export function LanSharingPane() {
             setTrusted(nextPeers.trusted);
             setCatalogs(nextCatalogs.catalogs);
             setResources(nextResources.resources.filter((resource) => resource.status === "ready"));
+            void refreshAssetStatuses(nextCatalogs.catalogs.map((catalog) => catalog.id));
         } catch (error) {
             setLoadError(errorMessage(error));
         } finally {
             setLoading(false);
             setRefreshing(false);
         }
-    }, []);
+    }, [refreshAssetStatuses]);
 
     const publishPendingUpdates = useCallback((catalogId: string, catalog: SharedCatalog) => {
         const key = catalogCacheKey(scope, catalogId);
@@ -259,7 +285,6 @@ export function LanSharingPane() {
             [catalogId]: { ...bindingsRef.current[catalogId], [contentHash]: resourceId },
         };
         bindingsRef.current = next;
-        setResourceBindings(next);
         await localForageStorageForScope(scope).setItem(LOCAL_RESOURCE_BINDINGS_KEY, JSON.stringify(next));
     }, [scope]);
 
@@ -387,6 +412,13 @@ export function LanSharingPane() {
         };
     }, [catalogIdsKey, connectCatalog, publishPendingUpdates, status?.enabled]);
 
+    useEffect(() => {
+        if (!catalogIdsKey) return;
+        const catalogIds = catalogIdsKey.split("\0");
+        const timer = setInterval(() => { void refreshAssetStatuses(catalogIds); }, 60_000);
+        return () => clearInterval(timer);
+    }, [catalogIdsKey, refreshAssetStatuses]);
+
     const toggleSharing = async (enabled: boolean) => {
         setBusy("sharing");
         setActionError("");
@@ -499,6 +531,7 @@ export function LanSharingPane() {
         try {
             const result = await createLanSharingCatalog(name);
             setCatalogs((current) => [...current.filter((catalog) => catalog.id !== result.catalog.id), result.catalog]);
+            void refreshAssetStatuses([result.catalog.id]);
             setCatalogName("");
             message.success("清单已创建");
         } catch (error) {
@@ -518,6 +551,7 @@ export function LanSharingPane() {
             const catalog = await connectCatalog(catalogId);
             catalog.upsertEntry(result.asset);
             await persistLocalResourceBinding(catalogId, result.asset.contentHash, resourceId);
+            await refreshAssetStatuses([catalogId]);
             setResourceByCatalog((current) => ({ ...current, [catalogId]: "" }));
         } catch (error) {
             setActionError(errorMessage(error));
@@ -544,6 +578,7 @@ export function LanSharingPane() {
                 size: entry.size,
             });
             await persistLocalResourceBinding(catalogId, entry.contentHash, result.resource.id);
+            await refreshAssetStatuses([catalogId]);
             setResources((current) => [result.resource, ...current.filter((resource) => resource.id !== result.resource.id)]);
             message.success("資產已匯入本機資源");
         } catch (error) {
@@ -713,6 +748,7 @@ export function LanSharingPane() {
                     <h2>共享清单</h2>
                     <span className="text-sm text-foreground/55">{catalogs.length}</span>
                 </div>
+                {assetStatusError ? <p className="text-sm text-amber-700" role="status">{assetStatusError}</p> : null}
                 <form className="flex min-w-0 flex-wrap gap-2" onSubmit={submitCatalog}>
                     <Input className="min-w-0 flex-1" aria-label="清单名称" value={catalogName} onChange={(event) => setCatalogName(event.target.value)} placeholder="清单名称" maxLength={80} />
                     <Button type="primary" htmlType="submit" icon={<Plus className="size-4" />} loading={busy === "catalog"} disabled={!catalogName.trim() || Boolean(busy)}>
@@ -722,7 +758,7 @@ export function LanSharingPane() {
                 {loading ? <p className="text-sm text-foreground/55" role="status">正在读取清单…</p> : catalogs.length === 0 ? <p className="text-sm text-foreground/55">暂无共享清单</p> : null}
                 {catalogs.map((catalog) => {
                     const catalogEntries = entriesByCatalog[catalog.id] || [];
-                    const heldResources = resourceBindings[catalog.id] || {};
+                    const localAssetStatuses = new Map((assetStatuses[catalog.id] || []).map((asset) => [asset.contentHash, asset]));
                     return (
                         <div key={catalog.id} className="border-b border-border py-3 last:border-b-0">
                             <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
@@ -751,8 +787,9 @@ export function LanSharingPane() {
                             {catalogEntries.length === 0 ? <p className="mt-3 text-sm text-foreground/55">此清单暂无资产</p> : (
                                 <div className="mt-2 divide-y divide-border">
                                     {catalogEntries.map((entry) => {
-                                        const resourceId = heldResources[entry.contentHash];
-                                        const isHeld = Boolean(resourceId && resources.some((resource) => resource.id === resourceId));
+                                        const localStatus = localAssetStatuses.get(entry.contentHash);
+                                        const availability = localStatus?.availability;
+                                        const isHeld = availability === "present";
                                         const peerKey = `${catalog.id}:${entry.entryId}`;
                                         const selectedPeerId = peerByEntry[peerKey] || peerLocations.find((peer) => peer.peerId === entry.createdBy)?.peerId;
                                         return (
@@ -764,6 +801,11 @@ export function LanSharingPane() {
                                                         <span>{formatBytes(entry.size)}</span>
                                                         <code className="break-all">{entry.contentHash}</code>
                                                     </div>
+                                                    {availability ? (
+                                                        <div className={`mt-1 text-xs ${availability === "missing" ? "text-destructive" : availability === "unknown" ? "text-amber-700" : "text-foreground/60"}`}>
+                                                            {availability === "present" ? "本机文件已确认" : availability === "missing" ? "本机文件缺失" : "本机文件待检查"} · {assetCheckTime(localStatus?.checkedAt)}
+                                                        </div>
+                                                    ) : null}
                                                 </div>
                                                 {isHeld ? (
                                                     <span className="shrink-0 text-sm text-foreground/60">本机已有</span>

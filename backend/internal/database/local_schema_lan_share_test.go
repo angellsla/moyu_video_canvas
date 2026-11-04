@@ -128,11 +128,73 @@ func TestLANSharingMigrationFromV28PreservesOwnedResourcesAndLedger(t *testing.T
 	if err := db.Order("version").Find(&after).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(after) != len(before)+2 || !reflect.DeepEqual(before, after[:len(before)]) {
+	if len(after) != len(before)+3 || !reflect.DeepEqual(before, after[:len(before)]) {
 		t.Fatalf("existing migration ledger changed: before=%+v after=%+v", before, after)
 	}
-	if last := after[len(after)-1]; last.Version != 30 || last.Name != "lan-collaboration-canvases" {
+	if last := after[len(after)-1]; last.Version != 31 || last.Name != "lan-catalog-resource-availability" {
 		t.Fatalf("new migration identity = %+v", last)
+	}
+}
+
+func TestLANResourceAvailabilityMigrationFromV30PreservesMappings(t *testing.T) {
+	db, _ := openFileDB(t)
+	if err := MigrateLocalSchema(db); err != nil {
+		t.Fatal(err)
+	}
+	verifiedAt := time.Date(2025, time.January, 2, 3, 4, 5, 0, time.UTC)
+	resource := model.LANCatalogResource{
+		CatalogID: "catalog-1", HashAlgorithm: "sha256", ContentHash: "asset-hash",
+		UserID: "local-user", ResourceID: "owned-resource", VerifiedAt: verifiedAt,
+	}
+	if err := db.Create(&resource).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, column := range []string{"availability", "checked_at"} {
+		if err := db.Exec("ALTER TABLE lan_catalog_resources DROP COLUMN " + column).Error; err != nil {
+			t.Fatalf("remove v31 column %s from v30 fixture: %v", column, err)
+		}
+		if has, err := sqliteHasColumn(db, "lan_catalog_resources", column); err != nil || has {
+			t.Fatalf("v30 fixture retained %s: exists=%v err=%v", column, has, err)
+		}
+	}
+	if err := db.Where("version = ?", 31).Delete(&localSchemaMigration{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	var before []localSchemaMigration
+	if err := db.Order("version").Find(&before).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(before) == 0 || before[len(before)-1].Version != 30 {
+		t.Fatalf("invalid v30 fixture ledger: %+v", before)
+	}
+	if err := MigrateLocalSchema(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := RequireLocalSchema(db); err != nil {
+		t.Fatal(err)
+	}
+	var stored model.LANCatalogResource
+	if err := db.First(&stored, "catalog_id = ? AND content_hash = ? AND user_id = ?", resource.CatalogID, resource.ContentHash, resource.UserID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.ResourceID != resource.ResourceID || !stored.VerifiedAt.Equal(verifiedAt) || stored.Availability != "unknown" || stored.CheckedAt != nil {
+		t.Fatalf("v30 mapping changed during availability migration: %+v", stored)
+	}
+	var after []localSchemaMigration
+	if err := db.Order("version").Find(&after).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before)+1 || !reflect.DeepEqual(before, after[:len(before)]) || after[len(after)-1].Name != "lan-catalog-resource-availability" {
+		t.Fatalf("migration ledger changed: %+v", after)
+	}
+	if err := db.Exec("ALTER TABLE lan_catalog_resources DROP COLUMN checked_at").Error; err != nil {
+		t.Fatal(err)
+	}
+	if has, err := sqliteHasColumn(db, "lan_catalog_resources", "checked_at"); err != nil || has {
+		t.Fatalf("checked_at column survived damage simulation: exists=%v err=%v", has, err)
+	}
+	if err := RequireLocalSchema(db); err == nil {
+		t.Fatal("v31 schema accepted missing availability check timestamp")
 	}
 }
 

@@ -7,6 +7,7 @@ import {
     decodeLanSharingUpdate,
     encodeLanSharingUpdate,
     getLanSharingCatalogUpdates,
+    getLanSharingCatalogAssetStatuses,
     getLanSharingCatalogs,
     getLanSharingPeers,
     getLanSharingStatus,
@@ -77,4 +78,34 @@ test("LAN update base64 encoding handles empty and chunked updates", () => {
     expect(encodeLanSharingUpdate(new Uint8Array())).toBe("");
     const update = new Uint8Array(0x8001).fill(0x61);
     expect(encodeLanSharingUpdate(update)).toBe(btoa("a".repeat(update.byteLength)));
+});
+
+test("LAN catalog asset status returns local file availability", async () => {
+    const original = apiClient.request;
+    const calls: Array<{ method?: string; url?: string }> = [];
+    apiClient.request = (async (config) => {
+        calls.push({ method: config.method, url: config.url });
+        return {
+            data: {
+                code: 0,
+                data: { assets: [
+                    { contentHash: "sha256:present", resourceId: "resource-a", availability: "present", checkedAt: "2026-11-04T00:00:00Z" },
+                    { contentHash: "sha256:missing", resourceId: "resource-b", availability: "missing", checkedAt: "2026-11-04T00:00:00Z" },
+                    { contentHash: "sha256:unknown", resourceId: "resource-c", availability: "unknown" },
+                ] },
+                msg: "ok",
+            },
+            status: 200,
+            headers: {},
+        };
+    }) as typeof apiClient.request;
+
+    try {
+        const response = await getLanSharingCatalogAssetStatuses("catalog/a");
+        expect(calls).toEqual([{ method: "get", url: "/lan-sharing/catalogs/catalog%2Fa/assets/status" }]);
+        expect(response.assets.map((asset) => asset.availability)).toEqual(["present", "missing", "unknown"]);
+        expect(response.assets[1].resourceId).toBe("resource-b");
+    } finally {
+        apiClient.request = original;
+    }
 });
