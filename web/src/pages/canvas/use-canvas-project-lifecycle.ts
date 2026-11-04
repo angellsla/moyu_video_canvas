@@ -546,7 +546,7 @@ export function useCanvasProjectLifecycle({
             // Task acknowledgements can already be present in the store before
             // this editor observes them. Equal local graphs still need a CAS save
             // when the backend has not confirmed that document yet.
-            if (localMode && hasUnconfirmedCanvasEdits(projectId)) scheduleLocalCanvasBackendSync(projectId);
+            if (localMode && !storedEditorProject()?.sharedCanvasId && hasUnconfirmedCanvasEdits(projectId)) scheduleLocalCanvasBackendSync(projectId);
             return;
         }
         traceCanvasGraph("editor.autosave", { observed: { id: projectId, ...observedContentRef.current }, render: { id: projectId, ...snapshot }, live: { id: projectId, nodes: nodesRef.current, connections: connectionsRef.current }, stored: useCanvasStore.getState().openProject(projectId) });
@@ -560,12 +560,12 @@ export function useCanvasProjectLifecycle({
         // 远端结果投影到编辑器不是一次本地编辑，避免改写时间戳并触发反向保存。
         if (stored && canvasDocumentMatchesFields(stored, patch)) {
             observedStoreRef.current = stored;
-            if (localMode && hasUnconfirmedCanvasEdits(projectId)) scheduleLocalCanvasBackendSync(projectId);
+            if (localMode && !stored?.sharedCanvasId && hasUnconfirmedCanvasEdits(projectId)) scheduleLocalCanvasBackendSync(projectId);
             return;
         }
         updateProject(projectId, patch);
         observedStoreRef.current = storedEditorProject() ?? observedStoreRef.current;
-        if (localMode) scheduleLocalCanvasBackendSync(projectId);
+        if (localMode && !storedEditorProject()?.sharedCanvasId) scheduleLocalCanvasBackendSync(projectId);
     }, [activeChatId, backgroundMode, canvasAppearance, chatSessions, connections, historyPausedRef, nodes, observedAtRender, projectId, projectLoaded, showImageInfo, updateProject]);
 
     useEffect(() => {
@@ -627,7 +627,7 @@ export function useCanvasProjectLifecycle({
             void (async () => {
                 await flushCanvasStorePersistence();
                 if (!userScopeMatches(owner)) return;
-                if (localMode) await syncLocalCanvasProjectToBackend(projectId, owner);
+                if (localMode && !useCanvasStore.getState().openProject(projectId)?.sharedCanvasId) await syncLocalCanvasProjectToBackend(projectId, owner);
             })().catch((error) => {
                 if (isCanvasSubmitControlError(error)) return;
                 console.error("离开画布时保存失败", { projectId, reason, error });
@@ -663,6 +663,7 @@ export function useCanvasProjectLifecycle({
     }, [currentProject, localMode, message, navigate]);
 
     const deleteCurrentProject = useCallback(async () => {
+        if (currentProject?.sharedCanvasId) { message.warning("请在协作画布列表中管理共享画布"); return; }
         const scope = captureUserScope();
         const siblingCanvases = listCanvasWorkspaceProjectCanvases(useCanvasStore.getState().projects, projectId);
         const nextCanvas = siblingCanvases.find((canvas) => canvas.id !== projectId);
@@ -679,12 +680,13 @@ export function useCanvasProjectLifecycle({
         }
         cleanupAssetImages();
         navigate(nextCanvas ? `/canvas/${nextCanvas.id}` : "/canvas");
-    }, [cleanupAssetImages, localMode, message, navigate, nodesRef, projectId]);
+    }, [cleanupAssetImages, currentProject?.sharedCanvasId, localMode, message, navigate, nodesRef, projectId]);
 
     const renameCurrentProject = useCallback((title: string) => {
         if (!currentProject) return;
+        if (currentProject.sharedCanvasId) { message.warning("请在协作画布列表中管理名称"); return; }
         renameProject(canvasWorkspaceProjectId(currentProject), title);
-    }, [currentProject, renameProject]);
+    }, [currentProject, message, renameProject]);
 
     const persistLocalEdits = useCallback(async () => {
         if (!projectLoaded || editorProjectIdRef.current !== projectId) return;
@@ -707,7 +709,7 @@ export function useCanvasProjectLifecycle({
         }
         updateProject(projectId, { viewport: viewportRef.current });
         await flushCanvasStorePersistence();
-        if (localMode) await syncLocalCanvasProjectToBackend(projectId);
+        if (localMode && !useCanvasStore.getState().openProject(projectId)?.sharedCanvasId) await syncLocalCanvasProjectToBackend(projectId);
     }, [activeChatId, backgroundMode, canvasAppearance, chatSessions, connectionsRef, localMode, nodesRef, projectId, projectLoaded, showImageInfo, updateProject, viewportRef]);
 
     const reloadLatestCanvasProject = useCallback(async () => {
@@ -735,6 +737,10 @@ export function useCanvasProjectLifecycle({
         } catch {
             message.error("画布保存失败，请稍后重试");
             return false;
+        }
+        if (useCanvasStore.getState().openProject(projectId)?.sharedCanvasId) {
+            message.success("协作画布已保存到本机，联网后继续同步");
+            return options.requireRemote !== true;
         }
         if (!hasRemoteUserDataSyncSession()) {
             message.success("画布已保存到本地");

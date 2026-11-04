@@ -37,6 +37,12 @@ export async function loadCanvasProjectForEditing(
 ) {
     const expected = captureUserScope();
     assertUserScope(expected);
+    const cached = useCanvasStore.getState().openProject(id);
+    if (cached?.sharedCanvasId) {
+        if (options.historyRestore) throw new Error("协作画布没有个人画布历史版本");
+        options.onLoad?.(cached);
+        return cached;
+    }
     if (options.historyRestore) {
         const restored = await restoreLocalCanvasProjectFromHistory(id, options.historyRestore, expected);
         assertUserScope(expected);

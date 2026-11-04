@@ -11,13 +11,14 @@ import DiagnosticsPanel from "./diagnostics-panel";
 import { StorageSettingsPane } from "./storage-settings-pane";
 import { DepthComponentsPanel } from "@/components/depth-components-panel";
 import { ReferenceStoragePane } from "./reference-storage-pane";
+import { LanSharingPane } from "./lan-sharing-pane";
 import { getDesktopAppBinding } from "@/services/desktop-runtime";
 import { PageHeader } from "@/components/layout/workspace-page";
 
-type ConfigSectionKey = "channels" | "models" | "storage" | "diagnostics";
+type ConfigSectionKey = "channels" | "models" | "storage" | "sharing" | "diagnostics";
 
 export function isConfigSection(value: string | null): value is ConfigSectionKey {
-    return value === "channels" || value === "storage" || value === "diagnostics";
+    return value === "channels" || value === "storage" || value === "sharing" || value === "diagnostics";
 }
 
 export default function SettingsPage() {
@@ -26,7 +27,8 @@ export default function SettingsPage() {
     const [searchParams, setSearchParams] = useSearchParams();
     const requestedSection = searchParams.get("section");
     const customChannelsEnabled = useUserStore((state) => state.features.customChannelsEnabled);
-    const initialSection = isConfigSection(requestedSection) ? requestedSection : "channels";
+    const desktopApp = Boolean(getDesktopAppBinding());
+    const initialSection = isConfigSection(requestedSection) && (requestedSection !== "sharing" || desktopApp) ? requestedSection : "channels";
     const [activeTab, setActiveTab] = useState<ConfigSectionKey>(initialSection === "models" ? "channels" : initialSection);
     const config = useConfigStore((state) => state.config);
     const effectiveConfig = useEffectiveConfig();
@@ -40,8 +42,8 @@ export default function SettingsPage() {
     }, []);
 
     useEffect(() => {
-        setActiveTab(isConfigSection(requestedSection) && (requestedSection !== "storage" || nativeStorage) ? requestedSection : "channels");
-    }, [requestedSection, nativeStorage]);
+        setActiveTab(isConfigSection(requestedSection) && (requestedSection !== "storage" || nativeStorage) && (requestedSection !== "sharing" || desktopApp) ? requestedSection : "channels");
+    }, [requestedSection, nativeStorage, desktopApp]);
 
     const selectSection = (section: ConfigSectionKey) => {
         setActiveTab(section);
@@ -92,6 +94,11 @@ export default function SettingsPage() {
                         <DepthComponentsPanel />
                     </section>
                 </div>
+            </SettingsPane>
+        ),
+        sharing: (
+            <SettingsPane>
+                <LanSharingPane />
             </SettingsPane>
         ),
         models: (

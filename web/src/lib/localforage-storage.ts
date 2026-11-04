@@ -13,6 +13,7 @@ export const RESOURCE_BLOB_META_STORE_NAME = "resource_blob_meta";
 export const DRAWING_DOCUMENTS_STORE_NAME = "drawing_documents";
 export const DRAWING_PREVIEWS_STORE_NAME = "drawing_previews";
 export const DRAWING_GENERATION_RENDERS_STORE_NAME = "drawing_generation_renders";
+export const SHARED_CATALOG_STORE_NAME = "shared_catalog_docs";
 
 export const INFINITE_CANVAS_OBJECT_STORES = [
     APP_STATE_STORE_NAME,
@@ -24,6 +25,7 @@ export const INFINITE_CANVAS_OBJECT_STORES = [
     DRAWING_DOCUMENTS_STORE_NAME,
     DRAWING_PREVIEWS_STORE_NAME,
     DRAWING_GENERATION_RENDERS_STORE_NAME,
+    SHARED_CATALOG_STORE_NAME,
 ] as const;
 
 localforage.config({

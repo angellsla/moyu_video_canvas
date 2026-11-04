@@ -1,0 +1,119 @@
+name: Verify collaboration and build desktop
+
+on:
+  push:
+    branches:
+      - 'codex/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: collaboration-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  verify:
+    name: Go tests and web build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache: true
+          cache-dependency-path: backend/go.sum
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Test backend with SQLite CGO
+        working-directory: backend
+        env:
+          CGO_ENABLED: '1'
+        run: go test ./...
+
+      - name: Install web dependencies
+        working-directory: web
+        run: bun install --frozen-lockfile
+
+      - name: Test LAN collaboration contracts
+        working-directory: web
+        run: >-
+          bun test
+          test/collaborative-canvas-document.test.ts
+          test/lan-collaboration-api.test.ts
+          test/lan-collaboration-assets.test.ts
+          test/lan-sharing-api.test.ts
+
+      - name: Build web
+        working-directory: web
+        run: bun run build
+
+  windows-desktop:
+    name: Build Windows desktop
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache: true
+          cache-dependency-path: backend/go.sum
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.1'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Select bundled Node runtime
+        shell: pwsh
+        run: |
+          $nodeDir = Split-Path -Parent (Get-Command node).Source
+          "BEEFTV_NODE_RUNTIME=$nodeDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install MSYS2 UCRT64 GCC
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          release: true
+          path-type: inherit
+          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-binutils
+
+      - name: Assert DWARF 5 CGO compiler
+        env:
+          MSYSTEM_PREFIX: ${{ steps.msys2.outputs.msys2-location }}\ucrt64
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\assert-windows-dwarf5-cgo.ps1
+
+      - name: Compile desktop without installer or release publication
+        env:
+          CGO_ENABLED: '1'
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-beeftv-windows-release.ps1 -SkipMediaSmokeChecks -SkipPackagingChecks
+
+      - name: Store desktop build for inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-desktop-build
+          path: backend/cmd/desktop/build/bin/
+          retention-days: 7
+          if-no-files-found: error

@@ -28,6 +28,7 @@ type InfiniteCanvasProps = {
     onFileDragOver?: (event: React.DragEvent<HTMLDivElement>) => void;
     children: React.ReactNode;
     graphicsLayer?: React.ReactNode;
+    collaborationLayer?: React.ReactNode;
 };
 
 const CANVAS_WHEEL_IGNORE_SELECTOR = "[data-canvas-no-zoom],[data-canvas-wheel-scroll],.ant-modal,.ant-popover,.ant-dropdown,.ant-select-dropdown,.ant-picker-dropdown";
@@ -46,7 +47,7 @@ type PinchState = {
     initialScale: number;
 };
 
-export function InfiniteCanvas({ interactive = true, containerRef, viewport, appearance, backgroundMode = "lines", wheelBehavior = "auto", onViewportChange, onViewportPreviewChange, onCanvasMouseDown, boxSelectEnabled = false, onCanvasDoubleClick, onCanvasDeselect, onContextMenu, onDrop, onFileDragEnter, onFileDragLeave, onFileDragOver, graphicsLayer, children }: InfiniteCanvasProps) {
+export function InfiniteCanvas({ interactive = true, containerRef, viewport, appearance, backgroundMode = "lines", wheelBehavior = "auto", onViewportChange, onViewportPreviewChange, onCanvasMouseDown, boxSelectEnabled = false, onCanvasDoubleClick, onCanvasDeselect, onContextMenu, onDrop, onFileDragEnter, onFileDragLeave, onFileDragOver, graphicsLayer, collaborationLayer, children }: InfiniteCanvasProps) {
     const colorTheme = useActiveTheme();
     const resolvedAppearance = resolveCanvasAppearance(appearance, colorTheme);
     const panState = useRef({
@@ -475,6 +476,7 @@ export function InfiniteCanvas({ interactive = true, containerRef, viewport, app
                 transparent hit surface changes the cursor without restyling
                 every descendant of the viewport or document body. */}
             <div aria-hidden data-canvas-pan-cursor className="absolute inset-0 z-[var(--z-node-toolbar)] cursor-grabbing" style={{ pointerEvents: isPanning ? "auto" : "none" }} />
+            {collaborationLayer}
         </div>
     );
 }

@@ -712,6 +712,7 @@ function shouldKeepCanvasCommitIdentity(error: unknown) {
 }
 
 export function syncLocalCanvasProjectToBackend(id: string, expectedScope?: CapturedUserScope): Promise<void> {
+    if (useCanvasStore.getState().openProject(id)?.sharedCanvasId) return flushCanvasStorePersistence();
     return syncLocalCanvasProject(id, expectedScope ?? captureUserScope());
 }
 
@@ -777,6 +778,10 @@ export async function persistCanvasDocument(id: string, patch: CanvasDocumentPer
     const previous = useCanvasStore.getState().openProject(id);
     useCanvasStore.getState().updateProject(id, patch);
     const attempted = useCanvasStore.getState().openProject(id);
+    if (attempted?.sharedCanvasId) {
+        await flushCanvasStorePersistence();
+        return;
+    }
     try {
         if (localMode) {
             await syncLocalCanvasProject(id, expected);
@@ -1222,6 +1227,7 @@ export async function deleteLocalCanvasProjects(ids: readonly string[]) {
     const snapshots = selected
         .map((id) => useCanvasStore.getState().openProject(id))
         .filter((project): project is CanvasProject => Boolean(project));
+    if (snapshots.some((project) => project.sharedCanvasId)) throw new Error("请在协作画布列表中管理共享画布");
     for (const id of selected) canvasDeleting.add(saveKey(scope, id));
     try {
         await Promise.all(selected.map((id) => waitForCanvasBackendIdle(id, scope)));

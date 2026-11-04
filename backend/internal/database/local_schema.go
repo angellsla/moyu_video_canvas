@@ -15,7 +15,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const CurrentSchemaVersion int64 = 28
+const CurrentSchemaVersion int64 = 30
 
 type localSchemaMigration struct {
 	Version   int64 `gorm:"primaryKey;autoIncrement:false"`
@@ -66,6 +66,8 @@ func LocalModels() []any {
 		&model.CanvasWorkflow{}, &model.CanvasWorkflowRun{}, &model.CanvasWorkflowResource{}, &model.CanvasWorkflowRevision{},
 		&model.PromptTemplate{}, &model.UserPromptCustomization{},
 		&model.Task{}, &model.CreationRun{}, &model.CreationSubmission{}, &model.TaskTextDelta{}, &model.TaskLog{}, &model.Result{},
+		&model.LANNodeIdentity{}, &model.LANTrustedPeer{}, &model.LANShareCatalog{}, &model.LANCatalogYjsUpdate{}, &model.LANCatalogResource{},
+		&model.LANCollaborationCanvas{}, &model.LANCollaborationCanvasYjsUpdate{},
 	}
 }
 
@@ -141,6 +143,12 @@ func canonicalLocalMigrations() []localMigration {
 		}},
 		{version: 28, name: "managed-media-query-identity", apply: func(tx *gorm.DB) error {
 			return ensureSQLiteColumn(tx, "image_submissions", "query_cipher", "TEXT")
+		}},
+		{version: 29, name: "lan-shared-resource-catalog", apply: func(tx *gorm.DB) error {
+			return tx.AutoMigrate(&model.LANNodeIdentity{}, &model.LANTrustedPeer{}, &model.LANShareCatalog{}, &model.LANCatalogYjsUpdate{}, &model.LANCatalogResource{})
+		}},
+		{version: 30, name: "lan-collaboration-canvases", apply: func(tx *gorm.DB) error {
+			return tx.AutoMigrate(&model.LANCollaborationCanvas{}, &model.LANCollaborationCanvasYjsUpdate{})
 		}},
 	}
 }
@@ -439,7 +447,7 @@ func RequireLocalSchema(db *gorm.DB) error {
 	if !db.Migrator().HasTable(&model.AssistantContinuation{}) {
 		return fmt.Errorf("本地工作区数据库结构缺失，请启用自动迁移")
 	}
-	for _, table := range []any{&model.Workspace{}, &model.Resource{}, &model.Project{}, &model.CanvasProject{}, &model.Task{}, &model.AgentOpRecord{}, &model.ImageSubmission{}, &model.AssistantTurn{}, &model.CreationConversation{}, &model.CanvasLibraryFolder{}, &model.CanvasDrawing{}, &model.AssistantSkillContext{}, &model.AssistantSkillContextMutation{}} {
+	for _, table := range []any{&model.Workspace{}, &model.Resource{}, &model.Project{}, &model.CanvasProject{}, &model.Task{}, &model.AgentOpRecord{}, &model.ImageSubmission{}, &model.AssistantTurn{}, &model.CreationConversation{}, &model.CanvasLibraryFolder{}, &model.CanvasDrawing{}, &model.AssistantSkillContext{}, &model.AssistantSkillContextMutation{}, &model.LANNodeIdentity{}, &model.LANTrustedPeer{}, &model.LANShareCatalog{}, &model.LANCatalogYjsUpdate{}, &model.LANCatalogResource{}, &model.LANCollaborationCanvas{}, &model.LANCollaborationCanvasYjsUpdate{}} {
 		if !db.Migrator().HasTable(table) {
 			return fmt.Errorf("本地工作区数据库结构缺失，请启用自动迁移")
 		}
@@ -493,7 +501,18 @@ func requireReconciledSchema(db *gorm.DB) error {
 	if !hasTurnID {
 		return fmt.Errorf("本地 Agent 幂等或回合归属结构缺失")
 	}
-	for _, value := range []any{&model.ImageSubmission{}, &model.AgentOpRecord{}} {
+	version, err := currentSchemaVersion(db)
+	if err != nil {
+		return err
+	}
+	models := []any{&model.ImageSubmission{}, &model.AgentOpRecord{}}
+	if version >= 29 {
+		models = append(models, &model.LANNodeIdentity{}, &model.LANTrustedPeer{}, &model.LANShareCatalog{}, &model.LANCatalogYjsUpdate{}, &model.LANCatalogResource{})
+	}
+	if version >= 30 {
+		models = append(models, &model.LANCollaborationCanvas{}, &model.LANCollaborationCanvasYjsUpdate{})
+	}
+	for _, value := range models {
 		stmt := &gorm.Statement{DB: db}
 		if err := stmt.Parse(value); err != nil {
 			return err
@@ -519,10 +538,6 @@ func requireReconciledSchema(db *gorm.DB) error {
 		if !valid {
 			return fmt.Errorf("本地数据库索引 %s 定义不完整", index.name)
 		}
-	}
-	version, err := currentSchemaVersion(db)
-	if err != nil {
-		return err
 	}
 	if version >= 10 {
 		if err := requireAssistantTurnsSchema(db); err != nil {

@@ -4,7 +4,7 @@ import { CanvasAssistantSidebar } from "./canvas-assistant-sidebar";
 import { useCanvasAssistantContinuation } from "./use-canvas-assistant-continuation";
 import { highlightAssistantNodes } from "./canvas-assistant-highlight";
 import { resolveCanvasRightPanel, useCanvasAssistant, useCanvasAssistantDockable } from "./use-canvas-assistant";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, MouseEvent as ReactMouseEvent, SetStateAction } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { isLocalWorkspaceMode } from "@/services/workspace-mode";
@@ -33,7 +33,7 @@ import { ensureCanvasNodeAsset } from "@/services/project-asset-sync";
 import { useCanvasThemeStore, useCanvasThemeScope } from "@/stores/canvas/use-canvas-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { App, Button } from "antd";
-import { ArrowLeftRight } from "lucide-react";
+import { ArrowLeftRight, MousePointer2, Users, Wifi, WifiOff } from "lucide-react";
 import { AppModal } from "@/components/ui/product/app-modal";
 import { CanvasDeleteConfirmation } from "@/components/canvas/canvas-delete-confirmation";
 import { CanvasConfigComposer } from "@/components/canvas/canvas-config-composer";
@@ -99,6 +99,8 @@ import { CanvasNodeActionContext, type CanvasNodeActionContextValue } from "@/co
 import { bringCanvasNodeToFront, type CanvasNodeStackOrder } from "@/lib/canvas/canvas-node-stack-order";
 import { CanvasNodeGraphContext, type CanvasNodeGraphContextValue } from "@/components/canvas/canvas-node-graph-context";
 import { CanvasRefreshShell } from "./canvas-refresh-shell";
+import { useLanCollaborativeCanvas, type LanCanvasPresence } from "./use-lan-collaborative-canvas";
+import type { SharedCanvasAssetReadiness } from "@/services/lan-collaboration-assets";
 import type { CanvasImageEmotionPayload } from "@/components/canvas/canvas-node-emotion-panel";
 import { CanvasEmotionWorkspace } from "@/components/canvas/canvas-emotion-workspace";
 import { removeCanvasDrawing } from "@/lib/canvas/canvas-drawing-storage";
@@ -158,6 +160,106 @@ const EMPTY_RESOURCE_REFERENCES: CanvasResourceReference[] = [];
 
 function isCanvasTextEditingTarget(target: EventTarget | null) {
     return target instanceof Element && Boolean(target.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])"));
+}
+
+const COLLABORATION_COLORS = ["#0f9d8a", "#d97706", "#2563eb", "#c2416c", "#65a30d"];
+
+function collaborationColor(peerId: string) {
+    let hash = 0;
+    for (const character of peerId) hash = (hash * 31 + character.charCodeAt(0)) | 0;
+    return COLLABORATION_COLORS[Math.abs(hash) % COLLABORATION_COLORS.length];
+}
+
+function CanvasCollaborationLayer({
+    members,
+    presence,
+    nodes,
+    viewport,
+    connected,
+    syncError,
+    missingAssets,
+    assetReadiness,
+}: {
+    members: LanCanvasPresence[];
+    presence: LanCanvasPresence[];
+    nodes: CanvasNodeData[];
+    viewport: ViewportTransform;
+    connected: boolean;
+    syncError: string;
+    missingAssets: string[];
+    assetReadiness: SharedCanvasAssetReadiness | null;
+}) {
+    const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
+    return (
+        <>
+            <div className="pointer-events-none absolute inset-0 z-[var(--z-node-toolbar)] overflow-hidden" aria-label="协作成员光标">
+                {presence.map((member) => {
+                    const color = collaborationColor(member.peerId);
+                    const selectedNodes = (member.state.selectionNodeIds || []).flatMap((nodeId) => {
+                        const node = nodeById.get(nodeId);
+                        if (!node) return [];
+                        return [
+                            <div
+                                key={`${member.peerId}:${node.id}`}
+                                className="absolute border-2"
+                                style={{
+                                    left: viewport.x + node.position.x * viewport.k,
+                                    top: viewport.y + node.position.y * viewport.k,
+                                    width: node.width * viewport.k,
+                                    height: node.height * viewport.k,
+                                    borderColor: color,
+                                    background: `${color}12`,
+                                }}
+                            />,
+                        ];
+                    });
+                    const hasCursor = typeof member.state.x === "number" && typeof member.state.y === "number";
+                    return (
+                        <Fragment key={member.peerId}>
+                            {selectedNodes}
+                            {hasCursor ? (
+                                <div
+                                    className="absolute flex items-start gap-1.5 whitespace-nowrap text-xs font-medium"
+                                    style={{
+                                        left: viewport.x + member.state.x! * viewport.k,
+                                        top: viewport.y + member.state.y! * viewport.k,
+                                        color,
+                                    }}
+                                >
+                                    <MousePointer2 className="size-4 shrink-0 fill-current" />
+                                    <span className="rounded-sm px-1.5 py-0.5 text-white" style={{ background: color }}>{member.nickname}</span>
+                                </div>
+                            ) : null}
+                        </Fragment>
+                    );
+                })}
+            </div>
+            <div className="pointer-events-none absolute right-3 top-3 z-[var(--z-node-toolbar)] flex max-w-[min(28rem,calc(100%-1.5rem))] flex-wrap items-center justify-end gap-x-3 gap-y-1 rounded-sm border border-border bg-surface/95 px-2.5 py-1.5 text-xs text-foreground shadow-sm" role="status" aria-live="polite" title={syncError || undefined}>
+                <span className="inline-flex items-center gap-1.5">
+                    {connected ? <Wifi className="size-3.5 text-emerald-600" /> : <WifiOff className="size-3.5 text-foreground/55" />}
+                    {connected ? "协作已连接" : "正在连接协作"}
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                    <Users className="size-3.5" />
+                    {members.length ? members.map((member) => (
+                        <span key={member.peerId} className="inline-flex items-center gap-1">
+                            <span className={`size-1.5 rounded-full ${member.collaborating ? "bg-emerald-500" : member.online ? "bg-amber-500" : "bg-foreground/35"}`} />
+                            {member.nickname}
+                            <span className="text-foreground/55">{member.collaborating ? "协作中" : member.online ? "局域网在线" : "离线"}</span>
+                        </span>
+                    )) : "等待成员"}
+                </span>
+                {missingAssets.length ? <span className="text-amber-700">{missingAssets.length} 项素材待同步</span> : null}
+                {assetReadiness?.requiredCount ? (
+                    <span title="对端数值来自共享清单声明，尚未经该设备确认">
+                        本机素材 {assetReadiness.local.mappedCount}/{assetReadiness.requiredCount}
+                        {assetReadiness.peers.map((peer) => ` · ${peer.nickname}: ${peer.claimedCount} 项声明${peer.discovered ? "" : "（离线）"}`)}
+                    </span>
+                ) : null}
+                {syncError ? <span className="text-red-600">同步异常</span> : null}
+            </div>
+        </>
+    );
 }
 
 function visibleGenerationBatch(node: CanvasNodeData) {
@@ -455,6 +557,23 @@ function InfiniteCanvasPage() {
         adoptExternalSnapshot,
         cleanupAssetImages,
         cleanupCanvasFiles,
+    });
+
+    const applyRemoteSharedContent = useCallback((content: { nodes: CanvasNodeData[]; connections: CanvasConnection[] }) => {
+        nodesRef.current = content.nodes;
+        connectionsRef.current = content.connections;
+        setNodesState(content.nodes);
+        setConnections(content.connections);
+        adoptExternalSnapshot({ nodes: content.nodes, connections: content.connections });
+    }, [adoptExternalSnapshot, connectionsRef, nodesRef, setConnections]);
+
+    const collaboration = useLanCollaborativeCanvas({
+        project: currentProject,
+        projectLoaded,
+        containerRef,
+        viewport,
+        selectedNodeIds,
+        onRemoteContent: applyRemoteSharedContent,
     });
 
     useCanvasLibTvVisualFixtures({
@@ -2308,6 +2427,18 @@ function InfiniteCanvasPage() {
                                     appearance={canvasAppearance}
                                     backgroundMode={backgroundMode}
                                     wheelBehavior={wheelBehavior}
+                                    collaborationLayer={currentProject?.sharedCanvasId ? (
+                                        <CanvasCollaborationLayer
+                                            members={collaboration.members}
+                                            presence={collaboration.presence}
+                                            nodes={nodes}
+                                            viewport={viewport}
+                                            connected={collaboration.connected}
+                                            syncError={collaboration.syncError}
+                                            missingAssets={collaboration.missingAssets}
+                                            assetReadiness={collaboration.assetReadiness}
+                                        />
+                                    ) : null}
                                     graphicsLayer={
                                         <>
                                         <CanvasLodLayer

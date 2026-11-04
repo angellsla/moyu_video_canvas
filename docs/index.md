@@ -6,6 +6,7 @@
 
 - [项目首页与快速开始](../README.md)
 - [功能概览](content/docs/overview/features.mdx)
+- [局域网共享与协作画布](content/docs/overview/lan-sharing.mdx)
 - [Agent、Skills 与工作流实机案例](content/docs/overview/examples.mdx)
 - [本地优先架构](local-first-architecture.md)
 - [桌面端本地开发](desktop-local-development.md)

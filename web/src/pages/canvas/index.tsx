@@ -35,6 +35,7 @@ import { cn } from "@/lib/utils";
 import { assertUserScope, captureUserScope, type CapturedUserScope } from "@/lib/user-scope-guard";
 import { recordDiagnosticEvent } from "@/services/diagnostics/client-diagnostics";
 import { canvasIdsForWorkspaceProjects, canvasWorkspaceProjectId, listCanvasWorkspaceProjectCanvases, listCanvasWorkspaceProjectRoots, previewNodesForWorkspaceProject } from "@/lib/canvas/canvas-workspace-project";
+import { LanCollaborationLibrary } from "./lan-collaboration-library";
 
 const CanvasDeleteProjectsDialog = lazy(() => import("@/components/canvas/canvas-delete-projects-dialog").then((module) => ({ default: module.CanvasDeleteProjectsDialog })));
 
@@ -95,7 +96,7 @@ export default function CanvasPage() {
     });
     const projects = useMemo<CanvasLibrarySummary[]>(() => remoteMode
         ? libraryQuery.data?.pages.flatMap((page) => page.projects) || []
-        : listCanvasWorkspaceProjectRoots(localProjects).map((project) => ({ ...project, nodeCount: project.nodes.length, previewNodes: previewNodesForWorkspaceProject(localProjects, canvasWorkspaceProjectId(project)) })), [libraryQuery.data, localProjects, remoteMode]);
+        : listCanvasWorkspaceProjectRoots(localProjects.filter((project) => !project.sharedCanvasId)).map((project) => ({ ...project, nodeCount: project.nodes.length, previewNodes: previewNodesForWorkspaceProject(localProjects.filter((canvas) => !canvas.sharedCanvasId), canvasWorkspaceProjectId(project)) })), [libraryQuery.data, localProjects, remoteMode]);
     const totalProjects = remoteMode ? libraryQuery.data?.pages[0]?.total || 0 : projects.length;
     const selectedIds = useCanvasUiStore((state) => state.selectedProjectIds);
     const deleteDialogOpen = useCanvasUiStore((state) => state.deleteProjectIds.length > 0);
@@ -366,6 +367,7 @@ export default function CanvasPage() {
                 {exportError ? <p role="alert" className="mb-4 whitespace-pre-wrap break-words text-sm text-destructive">{exportError}</p> : null}
 
                 {!remoteMode && canvasHealth.error ? <div role="alert" className="mb-4 flex flex-wrap items-center gap-3 text-sm"><span>{canvasHealth.error}</span><Button loading={canvasHealth.loading} onClick={()=>void hydrateLocalCanvasProjectsFromBackend()}>重试加载</Button></div> : null}
+                {!remoteMode && isWailsNativeShell() ? <LanCollaborationLibrary projects={localProjects} /> : null}
                 {remoteMode && libraryQuery.isError ? (
                     <div role="alert">画布列表读取失败<Button onClick={() => void libraryQuery.refetch()}>重试</Button></div>
                 ) : !hydrated || (remoteMode && libraryQuery.isPending) ? (
@@ -472,7 +474,7 @@ export default function CanvasPage() {
                 description={`将删除此文件夹及其中 ${localProjects.filter((project) => project.folderId === deletingFolder.id).length} 个画布，画布里的节点和连线也会一起移除。`}
                 onCancel={() => setDeletingFolder(null)} onConfirm={async (assertCurrent) => {
                     const folderId = deletingFolder.id;
-                    const ids = useCanvasStore.getState().projects.filter((project) => project.folderId === folderId).map((project) => project.id);
+                    const ids = useCanvasStore.getState().projects.filter((project) => project.folderId === folderId && !project.sharedCanvasId).map((project) => project.id);
                     if (ids.length) await deleteLocalCanvasProjects(ids);
                     assertCurrent();
                     await deleteCanvasLibraryFolder(folderId);

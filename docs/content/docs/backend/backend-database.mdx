@@ -17,7 +17,7 @@ description: 墨羽Canvas后端核心持久化表与状态边界
 
 旧版本不能读取这个加密封装。降级前须停止所有工作区写入者，恢复升级前的完整工作区备份；不能只替换可执行文件后继续写入新配置。自动更新器的二进制回滚与工作区数据恢复是不同操作。
 
-当前本地候选的结构版本为 v28。正式 v1.6.21 的结构版本为 v3，历史 Agent 候选曾使用 v3–v6，另有图片恢复预览分支使用 v3 或 v7；这些预览编号不能当作正式版本已发布的证据。
+当前本地候选的结构版本为 v30。正式 v1.6.21 的结构版本为 v3，历史 Agent 候选曾使用 v3–v6，另有图片恢复预览分支使用 v3 或 v7；这些预览编号不能当作正式版本已发布的证据。
 
 v14 `assistant-skill-version-pins` 为 `assistant_turns` 追加文本列 `skill_pins_json`。保存用户明确选定的技能、版本和内容摘要；旧回合留空。迁移保留未知字段、旧历史和回合快照。恢复时重新校验安装授权与包文件校验和，不自动切换新版。
 
@@ -46,6 +46,10 @@ v26 `task-recovery-outcome` 只给 `tasks` 追加无默认值的可空 `recovery
 v27 历史迁移曾给 `tasks` 追加旧托管服务特有的结算原值字段 `beef_usage_state`、`beef_billing_state`、`beef_reconcile_deadline` 和图片任务编号 `image_job_id`。当前代码不再读取或写入这些字段；旧数据库仍保留列以避免破坏 SQLite 迁移顺序。v26 已随 v2.0.5 发布，已升级的库不会重跑 v26，因此旧 ledger 记录不能改写。
 
 v28 历史迁移为 `image_submissions` 追加可空 `query_cipher TEXT`，供退役的托管媒体查询使用。当前通用 Provider 路径不使用此列；列及历史 ledger 仍保留，不含原生成 body 或素材，也不进入任务 API。清理 `request_cipher` 的既有恢复行为仍按请求凭据配置执行。缺列拒绝 Ready。
+
+v29 `lan-shared-resource-catalog` 新增本机节点身份、可信节点、共享目录、Yjs 更新日志和本地资源映射表。节点私钥只保存工作区密钥加密后的密文；可信节点记录保存最后已知的局域网 IPv4 地址和监听端口，供 mDNS 不可用时手动配对后的重连使用；Yjs 更新按目录和更新摘要去重。共享内容映射以目录、哈希算法、内容哈希和本地 `user_id` 为身份，指向该用户自己的 `resource_id`，并记录校验时间；共享目录不改变 `resources` 或 `assets` 的所有权，也不授予跨用户读取权限。此迁移只建立结构，不启动节点发现或资产传输。
+
+v30 `lan-collaboration-canvases` 新增独立的 `lan_collaboration_canvases` 房间元数据和 `lan_collaboration_canvas_yjs_updates` 持久更新日志。房间由创建节点管理名称、归档和删除；删除使用同步墓碑。`metadata_revision` 只随创建节点的管理操作递增，不由本地内容更新改变，避免设备时钟或内容活动时间阻止管理状态收敛。Yjs 更新以房间及 SHA-256 去重，通过创建节点向当前可信成员复制并通过游标补齐；非创建节点不向其他成员转发该房间的更新。可选 `asset_catalog_id` 关联既有共享资源清单，房间文档中的内容哈希仍映射到每台机器自己的本地资源；不改动个人 `canvas_projects`、CAS 或历史。
 
 
 v13 `upload-reservation-witness` 追加 `user_upload_reservations`，以 `(user_id, identity)` 唯一索引记录未完成上传预留的日期和字节数。日额仍由 `user_daily_upload_usages` 记账，预留索引与日额增加在同一事务内完成。资源进入 READY 时与状态保存在同一事务清除索引并保留日额；进入 FAILED 或放弃时与状态保存在同一事务按索引金额和日期释放。FAILED 准入只把状态改成 PENDING，不退日额。未结算资源写成 READY 前必须持有见证，缺见证时再预留；残留 FAILED 若仍持有原见证则沿用，不二次扣额。已结算 READY 丢失物理文件时，恢复不重新预留；物理写入或最终保存失败保留原 READY 状态并返回错误，下一次恢复仍复用原资源身份及已消费额度。启动恢复：无对应资源则释放一次；PENDING 保留索引；FAILED 释放；READY 清索引且保留日额。删除 READY 资源只清索引，不把已计入日额当成孤儿退还。重复清理不再扣减其他上传的日额。分片会话文件不是配额账；查询失败时保留恢复证据并记录恢复错误。同一身份的进行中重复预留映射为上传进行中。
@@ -103,7 +107,7 @@ $env:CANVAS_DESKTOP_DATA_DIR = 'D:\BeefTV-tests\candidate-workspace'
 
 `failure_diagnostics.source=local_network` 表示本机访问外部服务时的网络故障。DNS 底层 cause 只用于运行时的取消与重试判断；持久化内容仅包含安全摘要、`transportPhase=dns` 和实际操作阶段，不包含解析目标或 DNS 服务器地址。
 
-本地 SQLite 使用 `local_schema_migrations` 记录版本。本地候选目前为 v28，正式 v1.6.21 为 v3；历史图片恢复预览曾使用 v7。正式 v3 为 `tasks` 新增可空文本列 `failure_diagnostics`，存储有界、脱敏的执行证据和失败摘要；旧任务保留空值。失败诊断与任务终态在同一次带租约校验的更新中保存，成功任务也保留执行证据，主动重试时清除上一轮诊断。任务列表和详情均读取该列，字段说明见 [HTTP API](./http-api)。整合 v8 同时补齐历史分支可能缺失的产品与 Agent 结构，v9 修复已标 v8 的已知结构缺损并强化完整性检查，v10 追加助手业务回合表，v11 追加创作对话表，v12 追加画布文件夹与画板，v13 追加上传预留恢复索引，v14 追加固定技能版本，v15 追加内置权限和跨画布快照，v16 追加助手持久会话绑定，保留原迁移记录、Agent 表和任务扩展列。v17–v21 的活动技能、生成接续、意图撤销、制作授权和市场版本元数据见本文前述迁移说明。
+本地 SQLite 使用 `local_schema_migrations` 记录版本。本地候选目前为 v30，正式 v1.6.21 为 v3；历史图片恢复预览曾使用 v7。正式 v3 为 `tasks` 新增可空文本列 `failure_diagnostics`，存储有界、脱敏的执行证据和失败摘要；旧任务保留空值。失败诊断与任务终态在同一次带租约校验的更新中保存，成功任务也保留执行证据，主动重试时清除上一轮诊断。任务列表和详情均读取该列，字段说明见 [HTTP API](./http-api)。整合 v8 同时补齐历史分支可能缺失的产品与 Agent 结构，v9 修复已标 v8 的已知结构缺损并强化完整性检查，v10 追加助手业务回合表，v11 追加创作对话表，v12 追加画布文件夹与画板，v13 追加上传预留恢复索引，v14 追加固定技能版本，v15 追加内置权限和跨画布快照，v16 追加助手持久会话绑定，保留原迁移记录、Agent 表和任务扩展列。v17–v21 的活动技能、生成接续、意图撤销、制作授权和市场版本元数据见本文前述迁移说明。
 
 部分预览版曾将 v3–v6 用于其他迁移。启动时还会按实际表结构检查并补齐 `failure_diagnostics`，不覆盖迁移记录、不删除预览版字段或旧任务；就绪检查同时要求最低版本和该字段存在。任务入库失败返回 HTTP 500、`reason=local_storage_failed`，界面明确显示本地保存失败、尚未提交生成。内部错误链保留数据库原因，HTTP 响应不包含 SQL 原文；handler 日志记录错误类型。
 
@@ -148,7 +152,7 @@ HTTPS 图片提交前读取同源 `/models` 元数据，仅成功响应明确声
 
 ### 本地工作区结构（桌面形态）
 
-桌面形态使用由 `local_schema_migrations` 管理的本地结构版本（当前候选为 27，见 `backend/internal/database/local_schema.go`），
+桌面形态使用由 `local_schema_migrations` 管理的本地结构版本（当前候选为 30，见 `backend/internal/database/local_schema.go`），
 与上面的托管版本序列相互独立。版本 11 由会话工作单独占用，本序列从 10 直接进入 12。
 
 版本 3 `agent-operation-records` 为既有版本 2 工作区创建 `agent_op_records` 及用户、操作 ID 联合主键；版本 4/5 为任务的客户端操作编号补充结构；版本 6 `agent-operation-turn-attribution` 为 `agent_op_records` 增加可空的 `turn_id` 与索引，用于把内置助手一轮对话的写入回执归到该轮上。迁移只新增结构，不重写画布、项目或任务数据；结构创建与迁移记录在同一事务中提交。重复启动不会重复迁移，已成功操作的幂等结果在重启后继续回放。
@@ -157,7 +161,7 @@ HTTPS 图片提交前读取同源 `/models` 元数据，仅成功响应明确声
 
 | 表 | 用途 | 关键边界 |
 | --- | --- | --- |
-| `canvas_projects` | 画布文档（含 `revision` 与 `library_folder_id`） | 写入按 `revision` 原子 CAS：缺少读取时的 revision 或 revision 已过期都拒绝，不会覆盖别人刚写入的内容；`viewport` 属于本机查看偏好，由服务端规范化，不按内容保存；文件夹归属以 `library_folder_id` 为准，读回时覆盖 payload 中的 `folderId` |
+| `canvas_projects` | 个人画布文档（含 `revision` 与 `library_folder_id`） | 写入按 `revision` 原子 CAS：缺少读取时的 revision 或 revision 已过期都拒绝，不会覆盖别人刚写入的内容；`viewport` 属于本机查看偏好，由服务端规范化，不按内容保存；文件夹归属以 `library_folder_id` 为准，读回时覆盖 payload 中的 `folderId`。局域网协作画布使用独立 Yjs 文档与更新日志，不改变这里的归属、CAS 和历史规则 |
 | `canvas_library_folders` | 画布库文件夹 | 按用户归属；删除写入 `deleted_at` 墓碑并清空封面引用，不会物理删行；同时把仍指向它的画布 `library_folder_id`、`payload_json` 与 `revision` 一并更新并记历史。同 ID 不能再导入。封面是资源 ID |
 | `canvas_drawings` | 画板快照与 revision | 主键 `(user_id, canvas_id, drawing_id)`；写入按 revision CAS，丢失应答且正文相同可回放已提交结果；预览和成品字节走资源 ID，参与资源删除引用检查；删除写入墓碑并清空快照与资源引用。未保存草稿由前端保留为可恢复内容，禁止按原 ID 自动重建；后端不另存一份正文。快照计入账号画布和素材数据上限（`StructuredDataMB`），HTTP 请求体为该上限加 JSON 信封余量，没有单独的 8MB 画板上限 |
 | `canvas_snapshots`、`canvas_snapshot_resources` | 画布历史快照与快照引用的资源 | 快照读写按归属校验；历史恢复同样走 revision 前置条件 |

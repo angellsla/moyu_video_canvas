@@ -51,6 +51,10 @@ func registerDesktopCanvasAPI(api *gin.RouterGroup, svc *app.Service, dependenci
 	api.Use(SupportTracingMiddleware(svc))
 	RegisterOpenAPIRoutes(api)
 	RegisterWorkspaceRoutes(api, svc)
+	if dependencies.LANSharing != nil {
+		RegisterLANSharingRoutes(api, svc, dependencies.LANSharing)
+		RegisterLANAssetRoutes(api, dependencies.LANSharing, svc)
+	}
 	RegisterNewAPIConnectionRoutes(api, svc, dependencies.DesktopTrust)
 	RegisterDesktopAppearanceRoutes(api, svc)
 	RegisterDesktopFeatureAvailabilityRoutes(api, svc)

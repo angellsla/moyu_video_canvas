@@ -40,6 +40,12 @@ Wails 和浏览器开发模式共用同一套 `127.0.0.1` HTTP 合同。路由�
 
 ## 核心路由组
 
+### 局域网协作画布
+
+`/lan-sharing/canvases` 提供独立于个人 `/canvas-projects` 的协作文档：GET 列表，POST 创建（可携带首个 `initialUpdateBase64` 和共享素材 `assetCatalogId`），PATCH 由创建设备重命名或归档，DELETE 由创建设备写入删除墓碑。将个人画布变成协作画布时，客户端先复制文档再创建房间，原个人画布不变。协作成员是当前配对可信的 LAN 设备；所有成员均可读写 Yjs 更新。房间元数据仅接受创建节点通过其指纹绑定的 mTLS 连接直接复制；其他成员同步的第三方房间元数据不会改变名称、归档或删除状态。
+
+GET/POST `/lan-sharing/canvases/{canvasId}/updates` 用于分页断线补齐和持久化更新，单条更新解码后最多 4 MiB，按 SHA-256 去重；已删除房间的更新读写均返回 404。节点间访问采用创建者中心拓扑：非创建者只向创建者收发房间更新和在线状态；创建者向当前可信成员转发，成员间无需互信。节点间 GET/POST 更新接口和 WebSocket 帧按房间创建者校验来源，非创建者不能向其他成员提供该房间更新。在线浏览器通过同源 WebSocket `/lan-sharing/canvases/{canvasId}/stream` 收发 JSON 帧：客户端 `{"type":"update","updateBase64":"..."}` 或 `{"type":"presence","state":{...}}`；服务端更新帧包含 `canvasId`、`originNodeId`、`updateBase64`，presence 帧包含 `canvasId`、`peerId`、`state` 和 `expiresAt`。presence 仅临时转发，不进入更新日志。WebSocket 前由受信任桌面界面 POST `/stream-ticket` 取得绑定房间、30 秒有效且只能使用一次的票据；桌面长期令牌不放入 URL。节点间活动状态优先通过指纹绑定的 mTLS WebSocket 直连推送，连接建立或发送失败时回退到 mTLS HTTPS POST；每帧检查信任状态，撤销设备信任会关闭现有连接。关闭局域网共享时也会断开本机浏览器协作连接并阻止继续向节点发送帧。在线画布每 15 秒发送活动心跳，离线数据从持久更新游标补齐。房间管理元数据另以创建节点的单调 `metadataRevision` 合并，不由内容更新的时间戳决定。
+
 生成任务按协议的图片、视频、音频传输声明分别准备素材。用户自定义渠道可通过 `config.referenceMediaTransport` 覆盖对应类型，取值为 `auto`、`inline`、`url` 或 `link`。启用本地参考素材对象存储后，需要 URL 的本机资源在任务执行阶段上传，画布、创作页及其他后端任务入口共用同一流程。`link` 要求调用方提供现成链接，不自动上传。
 
 若缺少可用传输方式，提交返回 HTTP 400、`reason=reference_media_requires_url`，不创建任务。`msg` 包含受影响素材的类型和序号；`details.requiredReferences` 提供 `{ kind, index, mask? }`，`kind` 为 `image/video/audio`，`index` 从 0 开始，遮罩为 `mask: true`。客户端仅替换这些素材，补齐后可再次提交；其他网络或上游错误不适用此规则。执行阶段上传失败保留原任务的失败记录，不调用模型。声音、水印等开关接受布尔值及其字符串形式，已有任务的同类参数也按相同规则读取。
@@ -66,6 +72,7 @@ MiniMax speech 的 OpenAI 音频兼容目录通过 `audioOptions` 提供官方�
 | `POST /newapi/connection/sync` | 受信任的本机界面登录 New API，精确复用或创建 `videoCanvas` Key，读取全部 `/v1/models` 并保存 `newapi` 渠道；不持久化管理账号密码或 dashboard access token |
 | `/canvas-projects/*`, `/projects/*` | 画布、项目、章节、分镜与快照 |
 | `/resources/*` | 本地素材、分片上传和媒体读取 |
+| `/lan-sharing/*` | 桌面端显式启停的局域网设备配对、Yjs 共享清单和资产直传 |
 | `/timeline/render-plan` | 只读编译时间线语义渲染计划：不排队、不落盘、不计费 |
 | `/timeline/renders`、`/timeline/transcriptions` | 本机时间线成片任务与字幕转写任务 |
 | `/depth-captures` | 本机深度动作捕捉任务 |
@@ -174,6 +181,16 @@ MiniMax speech 的 OpenAI 音频兼容目录通过 `audioOptions` 提供官方�
 `GET /resources/:id/file?variant=playback&proxy=1` 在副本就绪时读取预览文件。原文件下载和模型素材引用不改变。预览尺寸不超过 1920×1080，保持比例，不放大小视频。
 
 `DELETE /resources/playback-cache` 清理当前用户已完成或失败的本地预览记录和副本，返回 `{ cleared }`。正在转换的预览和原资源不删除；其他用户的缓存不改变。
+
+### 局域网共享
+
+仅桌面 profile 注册 `/lan-sharing/*`。服务默认关闭，用户显式启动后监听 RFC1918 私有 IPv4 上的 TLS/TCP 端口；mDNS 仅作为发现提示，广告或组播不可用时保留监听端口并允许手动输入对端指纹、地址、端口和一次性配对码。配对通过 Ed25519 节点指纹固定 TLS 对端身份，发现本身不会建立信任；撤销信任后新连接及后续请求会被拒绝。共享内容不经过桌面业务 API 转发到其他设备。
+
+`GET /lan-sharing/status` 返回本机节点指纹、显示名称 `nickname`、服务状态、监听地址及有效配对码。`PUT /lan-sharing/nickname` 接收 `{nickname}` 设置本机显示名称，最多 80 个字符；提交空字符串会清除自定义名称并回退系统设备名称。名称只用于显示，不改变公钥指纹身份；服务运行中时 mDNS 广告立即更新。可信设备记录中的 `nickname` 是用户给对端设置的本地备注，与本机名称相互独立。`POST /lan-sharing/start` 和 `/stop` 显式控制 peer 监听；`GET /lan-sharing/peers` 返回已发现设备与可信设备（含最后已知地址）；`POST /lan-sharing/pair` 接收 `{peerId,address,port,pairingCode,nickname}`；`DELETE /lan-sharing/peers/:peerId` 撤销互信。
+
+`GET /lan-sharing/catalogs` 与 `POST /lan-sharing/catalogs` 列出或创建清单；摘要中的 `updateCount` 是已同步的 Yjs 更新记录数，不代表当前资产条目数。`GET /lan-sharing/catalogs/:catalogId/updates?after=&limit=` 读取分页 Yjs 更新；`POST` 接收 `{updateBase64}`，后端去重持久化并同步给在线可信节点，离线节点在恢复连接后按周期重试同步。前端本地未确认的 Yjs 更新会保存在按用户 scope 隔离的浏览器存储中，后端成功接受后才清除待发队列。
+
+`POST /lan-sharing/catalogs/:catalogId/assets` 接收当前用户拥有的本地 `resourceId`，读取本地资源、计算 SHA-256 并建立本机清单映射；`POST /lan-sharing/catalogs/:catalogId/assets/import` 接收 `{peerId,address,port,contentHash,name,mimeType,size}`，后端与受信任 peer 建立指纹固定 TLS 连接，流式接收内容并核对长度与 SHA-256，再通过现有资源服务创建接收端自己的本地资源记录。不受信任的对端返回 403、对端资产缺失返回 404、连接或内容校验失败返回 502。清单记录不携带发送端资源 ID 或路径；清单存在不代表任何 peer 当前在线或持有该资产，来源离线或没有本地映射时导入会失败。
 
 ### 素材与操作
 

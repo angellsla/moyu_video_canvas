@@ -21,6 +21,10 @@ export type CanvasProject = {
     id: string;
     revision?: number;
     remoteContentHash?: string;
+    /** The LAN collaboration room represented by this device-local canvas copy. */
+    sharedCanvasId?: string;
+    sharedCanvasCreatorNodeId?: string;
+    sharedCanvasAssetCatalogId?: string;
     /** Stable owner for the 1:N workspace-project -> canvases relationship. */
     workspaceProjectId?: string;
     projectId?: string;
@@ -71,7 +75,7 @@ type CanvasStore = {
     deleteProjects: (ids: string[]) => void;
     restoreProject: (project: CanvasProject) => void;
     replaceProjects: (projects: CanvasProject[]) => void;
-    updateProject: (id: string, patch: Partial<Pick<CanvasProject, "workspaceProjectId" | "projectId" | "folderId" | "title" | "canvasTitle" | "nodes" | "connections" | "chatSessions" | "activeChatId" | "starterMode" | "appearance" | "backgroundMode" | "showImageInfo" | "viewport" | "directorScenes" | "timeline">>) => void;
+    updateProject: (id: string, patch: Partial<Pick<CanvasProject, "workspaceProjectId" | "projectId" | "folderId" | "title" | "canvasTitle" | "nodes" | "connections" | "chatSessions" | "activeChatId" | "starterMode" | "appearance" | "backgroundMode" | "showImageInfo" | "viewport" | "directorScenes" | "timeline" | "sharedCanvasId" | "sharedCanvasCreatorNodeId" | "sharedCanvasAssetCatalogId">>) => void;
 };
 
 export const CANVAS_FOLDERS_KEY = "infinite-canvas:canvas_folders";
@@ -801,6 +805,9 @@ export const useCanvasStore = create<CanvasStore>()(
                 const project: CanvasProject = {
                     id: nanoid(),
                     revision: 0,
+                    sharedCanvasId: source.sharedCanvasId,
+                    sharedCanvasCreatorNodeId: source.sharedCanvasCreatorNodeId,
+                    sharedCanvasAssetCatalogId: source.sharedCanvasAssetCatalogId,
                     workspaceProjectId: undefined,
                     projectId: source.projectId,
                     folderId: source.folderId,

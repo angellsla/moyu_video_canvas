@@ -12,6 +12,7 @@ import (
 	"infinite-canvas/backend/internal/conversation"
 	"infinite-canvas/backend/internal/diagnostics"
 	"infinite-canvas/backend/internal/eagle"
+	"infinite-canvas/backend/internal/lansharing"
 	"infinite-canvas/backend/internal/localapp"
 	"infinite-canvas/backend/internal/model"
 	"infinite-canvas/backend/internal/modelcatalog"
@@ -59,6 +60,8 @@ type RuntimeDependencies struct {
 	// AssistantHost is the per-runtime supervisor for the built-in agent-host child.
 	// Separate runtimes must not share this value.
 	AssistantHost *assistantruntime.Host
+	// LANSharing owns the opt-in private peer listener for this runtime.
+	LANSharing *lansharing.Manager
 	// DesktopTrust verifies both the launch token and the separate Wails UI bootstrap credential.
 	// 桌面形态用它代替开发引导开关签发 UI 会话；服务端形态为 nil。
 	DesktopTrust func(*http.Request) bool
@@ -83,7 +86,7 @@ type serviceRuntimeAdapter struct {
 
 func newServiceRuntimeAdapter(value *app.Service) serviceRuntimeAdapter {
 	return serviceRuntimeAdapter{
-		dataDir: value.DataDir(),
+		dataDir:      value.DataDir(),
 		allowRequest: value.AllowRequest, requestRetryAfter: value.RequestRetryAfter,
 		readModelConfig: value.ReadLocalModelConfig, saveModelConfig: value.SaveLocalModelConfig,
 		resources: value.Resources, uploadLocalResource: value.UploadLocalResource,

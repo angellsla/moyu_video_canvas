@@ -28,7 +28,341 @@ tags:
   - name: agent-ops
   - name: assistant
   - name: creation-conversations
+  - name: lan-sharing
 paths:
+  /lan-sharing/status:
+    get:
+      tags: [lan-sharing]
+      summary: 读取本机局域网共享状态
+      description: 仅桌面配置注册此路由；返回稳定节点指纹、本机设备显示名称、运行状态、监听地址及有效的一次性配对码。nickname 为空时为系统设备名称。
+      responses:
+        "200": { description: 信封 data 为局域网共享状态，包含 nodeId、nickname、enabled、endpoint、pairingCode 和 pairingCodeExpiresAt }
+        "403": { description: 需要受信任的桌面界面 }
+  /lan-sharing/nickname:
+    put:
+      tags: [lan-sharing]
+      summary: 设置本机局域网设备名称
+      description: 名称只用于显示，不改变公钥指纹身份。空字符串会清除自定义名称并回退系统设备名称；运行中的 mDNS 广告立即更新。此字段独立于可信设备记录中的本地备注。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nickname]
+              properties:
+                nickname: { type: string, maxLength: 80, description: 空字符串表示使用系统设备名称 }
+      responses:
+        "200": { description: 信封 data 为更新后的局域网共享状态 }
+        "400": { description: 设备名称请求无效 }
+        "403": { description: 需要受信任的桌面界面 }
+        "404": { description: 本机 LAN 身份记录不存在 }
+  /lan-sharing/start:
+    post:
+      tags: [lan-sharing]
+      summary: 启动局域网直连服务
+      description: 启动私有 IPv4 上的 TLS/TCP peer 服务和尽力而为的 mDNS 发现；发现不可用时仍可手动配对。
+      responses:
+        "200": { description: 信封 data 为启动后的状态和一次性配对码 }
+        "500": { description: 本机网络接口或监听器启动失败 }
+        "403": { description: 需要受信任的桌面界面 }
+  /lan-sharing/stop:
+    post:
+      tags: [lan-sharing]
+      summary: 停止局域网直连服务
+      responses:
+        "200": { description: 信封 data.enabled 为 false }
+        "403": { description: 需要受信任的桌面界面 }
+  /lan-sharing/peers:
+    get:
+      tags: [lan-sharing]
+      summary: 列出发现及受信任设备
+      responses:
+        "200": { description: 信封 data 包含 discovered 与 trusted；可信设备包含最后已知 IPv4 地址和端口 }
+        "403": { description: 需要受信任的桌面界面 }
+  /lan-sharing/pair:
+    post:
+      tags: [lan-sharing]
+      summary: 使用一次性配对码建立设备互信
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [peerId, address, port, pairingCode, nickname]
+              properties:
+                peerId: { type: string, pattern: "^[a-f0-9]{64}$" }
+                address: { type: string, format: ipv4, description: RFC1918 私有 IPv4 }
+                port: { type: integer, minimum: 1, maximum: 65535 }
+                pairingCode: { type: string }
+                nickname: { type: string, maxLength: 80 }
+      responses:
+        "200": { description: 信封 data.peer 为已配对设备 }
+        "400": { description: 配对请求无效 }
+        "403": { description: 需要受信任的桌面界面 }
+        "409": { description: 配对码无效、已过期或设备身份冲突 }
+  /lan-sharing/peers/{peerId}:
+    delete:
+      tags: [lan-sharing]
+      summary: 撤销可信设备
+      parameters:
+        - in: path
+          name: peerId
+          required: true
+          schema: { type: string, pattern: "^[a-f0-9]{64}$" }
+      responses:
+        "200": { description: 信封 data.peerId 为已撤销设备 }
+        "404": { description: 设备不存在或未处于可信状态 }
+  /lan-sharing/catalogs:
+    get:
+      tags: [lan-sharing]
+      summary: 列出共享清单
+      responses:
+        "200": { description: 信封 data.catalogs 为清单摘要；updateCount 表示已同步的 Yjs 更新记录数，不代表当前资产条目数 }
+    post:
+      tags: [lan-sharing]
+      summary: 创建共享清单
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 120 }
+      responses:
+        "200": { description: 信封 data.catalog 为新清单 }
+        "400": { description: 清单名称无效 }
+  /lan-sharing/catalogs/{catalogId}/updates:
+    get:
+      tags: [lan-sharing]
+      summary: 分页读取本机已接收的 Yjs 更新
+      parameters:
+        - in: path
+          name: catalogId
+          required: true
+          schema: { type: string }
+        - in: query
+          name: after
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        "200": { description: 信封 data 包含 updates、cursor 与 hasMore }
+        "404": { description: 清单不存在 }
+    post:
+      tags: [lan-sharing]
+      summary: 保存一个本地 Yjs 更新并向可信设备同步
+      parameters:
+        - in: path
+          name: catalogId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [updateBase64]
+              properties:
+                updateBase64: { type: string, format: byte, description: 单个 Yjs 二进制更新的 Base64，解码后最多 4 MiB }
+      responses:
+        "200": { description: 信封 data.accepted 表示新更新已保存；重复更新返回 false }
+        "400": { description: 更新无效或过大 }
+        "404": { description: 清单不存在 }
+  /lan-sharing/canvases:
+    get:
+      tags: [lan-sharing]
+      summary: 列出局域网协作画布
+      description: 返回已配对可信节点可见的协作房间；正文由独立 Yjs 文档表示，不使用个人画布的修订号或历史。
+      responses:
+        "200": { description: 信封 data.canvases 为协作画布摘要 }
+        "403": { description: 需要受信任的桌面界面 }
+    post:
+      tags: [lan-sharing]
+      summary: 新建协作画布或从个人画布复制
+      description: 客户端提交复制后的首个 Yjs 更新；可附关联的共享素材清单 ID。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 120 }
+                assetCatalogId: { type: string, description: 由协作画布引用素材使用的共享资源清单 ID }
+                initialUpdateBase64: { type: string, format: byte, description: 可选的首个 Yjs 文档更新，解码后最多 4 MiB }
+      responses:
+        "200": { description: 信封 data.canvas 为新协作画布 }
+        "400": { description: 名称、素材清单或首个文档更新无效 }
+        "404": { description: 素材清单不存在 }
+  /lan-sharing/canvases/{canvasId}:
+    patch:
+      tags: [lan-sharing]
+      summary: 重命名、归档或恢复协作画布
+      description: 仅画布创建节点可修改管理元数据。
+      parameters:
+        - in: path
+          name: canvasId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, minLength: 1, maxLength: 120 }
+                archived: { type: boolean }
+      responses:
+        "200": { description: 信封 data.canvas 为更新后的画布 }
+        "403": { description: 当前设备不是创建者 }
+        "404": { description: 画布不存在 }
+    delete:
+      tags: [lan-sharing]
+      summary: 删除协作画布
+      description: 仅画布创建节点可删除；以墓碑同步，不改动个人画布。
+      parameters:
+        - in: path
+          name: canvasId
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: 协作画布删除完成 }
+        "403": { description: 当前设备不是创建者 }
+        "404": { description: 画布不存在 }
+  /lan-sharing/canvases/{canvasId}/updates:
+    get:
+      tags: [lan-sharing]
+      summary: 分页读取协作画布 Yjs 更新
+      description: 已删除房间返回 404，不再提供更新日志读取。
+      parameters:
+        - in: path
+          name: canvasId
+          required: true
+          schema: { type: string }
+        - in: query
+          name: after
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        "200": { description: 信封 data 包含 updates、cursor 与 hasMore }
+        "404": { description: 画布不存在 }
+    post:
+      tags: [lan-sharing]
+      summary: 持久化协作画布的 Yjs 更新
+      parameters:
+        - in: path
+          name: canvasId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [updateBase64]
+              properties:
+                updateBase64: { type: string, format: byte, description: 解码后最多 4 MiB；重复更新按 SHA-256 去重 }
+      responses:
+        "200": { description: 信封 data.accepted 表示新更新已保存 }
+        "400": { description: 更新无效或过大 }
+        "404": { description: 画布不存在 }
+  /lan-sharing/canvases/{canvasId}/stream-ticket:
+    post:
+      tags: [lan-sharing]
+      summary: 签发一次性协作流票据
+      description: WebSocket 无法携带桌面认证头；由受信任桌面请求取得 30 秒有效的一次性票据，票据绑定画布。
+      parameters:
+        - in: path
+          name: canvasId
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { description: 信封 data 包含 ticket 与 expiresInSeconds }
+        "404": { description: 画布不存在 }
+  /lan-sharing/canvases/{canvasId}/stream:
+    get:
+      tags: [lan-sharing]
+      summary: 打开协作画布本地实时流
+      description: 同源 WebSocket，使用一次性 ticket 查询参数；update 帧持久化后推送，presence 帧仅临时转发。
+      parameters:
+        - in: path
+          name: canvasId
+          required: true
+          schema: { type: string }
+        - in: query
+          name: ticket
+          required: true
+          schema: { type: string }
+      responses:
+        "101": { description: WebSocket upgrade 成功 }
+        "403": { description: 票据无效或已过期 }
+  /lan-sharing/catalogs/{catalogId}/assets:
+    post:
+      tags: [lan-sharing]
+      summary: 将当前用户拥有的本地资源加入共享清单
+      parameters:
+        - in: path
+          name: catalogId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [resourceId]
+              properties:
+                resourceId: { type: string }
+                entryId: { type: string }
+                name: { type: string, maxLength: 255 }
+      responses:
+        "200": { description: 信封 data.asset 含 SHA-256 与资产元数据 }
+        "400": { description: 资源未就绪、非本地归属或大小超出限制 }
+        "404": { description: 清单或资源不存在 }
+  /lan-sharing/catalogs/{catalogId}/assets/import:
+    post:
+      tags: [lan-sharing]
+      summary: 从受信任 peer 直连导入资产到本地资源库
+      description: TLS 证书按节点指纹固定；字节流经 TCP 直传并在写入资源库前验证 SHA-256 和长度。
+      parameters:
+        - in: path
+          name: catalogId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [peerId, address, port, contentHash, name, mimeType, size]
+              properties:
+                peerId: { type: string, pattern: "^[a-f0-9]{64}$" }
+                address: { type: string, format: ipv4, description: RFC1918 私有 IPv4 }
+                port: { type: integer, minimum: 1, maximum: 65535 }
+                contentHash: { type: string, pattern: "^[a-f0-9]{64}$" }
+                name: { type: string, maxLength: 255 }
+                mimeType: { type: string, maxLength: 120 }
+                size: { type: integer, minimum: 1 }
+      responses:
+        "200": { description: 信封 data.resource 为接收端自己的本地资源记录 }
+        "400": { description: 资产元数据无效 }
+        "403": { description: peer 未建立信任 }
+        "404": { description: 清单或 peer 侧资产不存在 }
+        "413": { description: 资产超过本地资源限制 }
+        "502": { description: 直连传输或校验失败 }
   /business/tools:
     get:
       tags: [agent-ops]

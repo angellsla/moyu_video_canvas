@@ -22,6 +22,7 @@ import (
 	"infinite-canvas/backend/internal/depthcapture"
 	"infinite-canvas/backend/internal/eagle"
 	canvasHandler "infinite-canvas/backend/internal/handler"
+	"infinite-canvas/backend/internal/lansharing"
 	"infinite-canvas/backend/internal/localapp"
 	"infinite-canvas/backend/internal/modelcatalog"
 	"infinite-canvas/backend/internal/repository"
@@ -45,6 +46,7 @@ type Runtime struct {
 	launchToken      string
 	uiBootstrapToken string
 	assistantHost    *assistantruntime.Host
+	lanSharing       *lansharing.Manager
 	listener         net.Listener
 	httpServer       *http.Server
 	serveErr         chan error
@@ -145,6 +147,19 @@ func Open(_ context.Context, raw Config) (result *Runtime, openErr error) {
 		return nil, ownerErr
 	}
 	scope := workspace.Context{ID: owner.ID, DataDir: cfg.DataDir}
+	var lanSharing *lansharing.Manager
+	if cfg.Profile == ProfileDesktop {
+		lanSharing, err = lansharing.NewManager(cfg.DataDir, db)
+		if err != nil {
+			cleanupService()
+			return nil, fmt.Errorf("初始化局域网共享: %w", err)
+		}
+		if err := canvasHandler.RegisterLANAssetPeerHandler(lanSharing, svc); err != nil {
+			_ = lanSharing.Close(context.Background())
+			cleanupService()
+			return nil, fmt.Errorf("注册局域网素材传输: %w", err)
+		}
+	}
 
 	// 桌面启动令牌在构建路由前解析：它既是整个 API 的入口凭据，也是「本机受信任 UI」
 	// 的判据（内置助手签发 UI 会话时使用）。服务端形态没有它，DesktopTrust 为 nil。
@@ -194,6 +209,7 @@ func Open(_ context.Context, raw Config) (result *Runtime, openErr error) {
 		Tasks:              localRoot.Tasks,
 		Generation:         localRoot.Generation,
 		AssistantHost:      assistantHost,
+		LANSharing:         lanSharing,
 		Conversations:      conversation.New(conversation.NewStore(repo)),
 		TextReplay:         svc.TextReplay(),
 		Appearance:         svc.AppearanceDomain(),
@@ -260,6 +276,10 @@ func Open(_ context.Context, raw Config) (result *Runtime, openErr error) {
 			_, _ = w.Write([]byte(`{"code":403,"reason":"external_business_forbidden","msg":"该接口不支持外部调用"}`))
 			return
 		}
+		if isCollaborationStreamRequest(r) {
+			router.ServeHTTP(w, r)
+			return
+		}
 		protected.ServeHTTP(w, r)
 	})
 	return &Runtime{
@@ -273,8 +293,25 @@ func Open(_ context.Context, raw Config) (result *Runtime, openErr error) {
 		launchToken:      launchToken,
 		uiBootstrapToken: uiBootstrapToken,
 		assistantHost:    assistantHost,
+		lanSharing:       lanSharing,
 		serveErr:         make(chan error, 1),
 	}, nil
+}
+
+func isCollaborationStreamRequest(r *http.Request) bool {
+	if r == nil || r.Method != http.MethodGet || r.URL.Query().Get("ticket") == "" {
+		return false
+	}
+	const prefix = "/api/lan-sharing/canvases/"
+	path := strings.TrimPrefix(r.URL.Path, prefix)
+	if path == r.URL.Path || !strings.HasSuffix(path, "/stream") {
+		return false
+	}
+	canvasID := strings.TrimSuffix(path, "/stream")
+	if canvasID == "" || strings.ContainsAny(canvasID, "/\\?#") || len(canvasID) > 80 {
+		return false
+	}
+	return true
 }
 
 func initializeService(svc *app.Service) error {
@@ -402,6 +439,11 @@ func (r *Runtime) Close(ctx context.Context) error {
 		if r.assistantHost != nil {
 			if err := r.assistantHost.StopContext(ctx); err != nil {
 				failures = append(failures, err)
+			}
+		}
+		if r.lanSharing != nil {
+			if err := r.lanSharing.Close(ctx); err != nil {
+				failures = append(failures, fmt.Errorf("关闭局域网共享: %w", err))
 			}
 		}
 		if err := r.DepthComponents().CloseComponents(ctx); err != nil {

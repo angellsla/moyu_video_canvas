@@ -276,6 +276,10 @@ func (s *Service) OpenResource(userID string, id string) (*model.Resource, io.Re
 	return s.resourceDomain().Open(userID, id)
 }
 
+func (s *Service) OpenResourceRange(userID string, id string, rangeHeader string) (*ResourceStream, error) {
+	return s.resourceDomain().OpenRange(userID, id, rangeHeader)
+}
+
 func (s *Service) OpenPublicResourceRange(id string, expires string, signature string, rangeHeader string) (*ResourceStream, error) {
 	resource, err := s.repo.Resource(id)
 	if err != nil {

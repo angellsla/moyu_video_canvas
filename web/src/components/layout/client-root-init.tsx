@@ -15,6 +15,8 @@ import { isLocalWorkspaceMode } from "@/services/workspace-mode";
 import { getActiveUserScope } from "@/lib/user-scope";
 import { confirmDesktopUpdateStartup } from "@/services/desktop-update-startup";
 import { runStartupEnvironmentCheck } from "@/services/diagnostics/environment-startup";
+import { isWailsNativeShell } from "@/services/desktop-media-save";
+import { startSharedCanvasAssetRetryWorker } from "@/services/lan-collaboration-assets";
 
 export function ClientRootInit({ children }: { children: ReactNode }) {
     const config = useConfigStore((state) => state.config);
@@ -33,6 +35,11 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     const localMediaCleanupScope = useRef("");
     const updateStartupConfirmed = useRef(false);
     const environmentScope = useRef("");
+
+    useEffect(() => {
+        if (!localMode || !isWailsNativeShell()) return;
+        return startSharedCanvasAssetRetryWorker();
+    }, [localMode, userId]);
 
     useEffect(() => {
         if (!userId || !localMode || environmentScope.current === userId) return;
