@@ -16,19 +16,18 @@
 
 <p align="center">
   <a href="https://github.com/glanderness/BeefTV/stargazers"><img src="https://img.shields.io/github/stars/glanderness/BeefTV?style=flat-square&amp;logo=github&amp;label=Stars&amp;labelColor=303030&amp;color=E86C36" alt="Moyu Canvas GitHub stars"></a>
-  <a href="https://github.com/glanderness/BeefTV/releases/latest"><img src="https://img.shields.io/github/v/release/glanderness/BeefTV?style=flat-square&amp;label=Release&amp;labelColor=303030&amp;color=525252" alt="Latest Moyu Canvas release"></a>
+  <a href="https://github.com/angellsla/moyu_video_canvas/releases/latest"><img src="https://img.shields.io/github/v/release/angellsla/moyu_video_canvas?style=flat-square&amp;label=Release&amp;labelColor=303030&amp;color=525252" alt="Latest Moyu Canvas release"></a>
   <a href="QUICKSTART.md#下载与首次打开"><img src="https://img.shields.io/badge/Desktop-macOS%20%7C%20Windows-525252?style=flat-square&amp;labelColor=303030" alt="Desktop support for macOS and Windows"></a>
   <a href="QUICKSTART.md"><img src="https://img.shields.io/badge/Workspace-Local--first-525252?style=flat-square&amp;labelColor=303030" alt="Local-first workspace"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Source%20Available-525252?style=flat-square&amp;labelColor=303030" alt="Source-available license; see LICENSE for terms"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/glanderness/BeefTV/releases/latest"><img src="assets/readme/button-download.svg" width="175" alt="Download Moyu Canvas desktop app"></a>
+  <a href="https://github.com/angellsla/moyu_video_canvas/releases/latest"><img src="assets/readme/button-download.svg" width="175" alt="Download Moyu Canvas desktop app"></a>
 </p>
 
 <p align="center">
   <a href="README.md">简体中文</a> ·
-  <a href="#recent-updates">Recent updates</a> ·
   <a href="#product-demo">Product demo</a> ·
   <a href="#workflows">Workflows</a> ·
   <a href="#agent">Agent</a> ·
@@ -37,16 +36,6 @@
   <a href="QUICKSTART.md">Get started</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
-
-## Recent updates
-
-- **[v2.0.3](https://github.com/glanderness/BeefTV/releases/tag/v2.0.3)** — Improve video prompt and reference validation, restore saved parameters on retry, and improve upscaling request reliability.
-- **[v2.0.2](https://github.com/glanderness/BeefTV/releases/tag/v2.0.2)** — Add Seedream layer splitting and related image sets; improve Agent multi-image checks, task recovery, and reference uploads.
-- **[v2.0.1](https://github.com/glanderness/BeefTV/releases/tag/v2.0.1)** — Add reusable workflows and Topaz upscaling, with fixed-version skill installation, rollback, and private adaptations.
-- **[v2.0.0](https://github.com/glanderness/BeefTV/releases/tag/v2.0.0)** — Connect storyboard planning, production, and video export through the creative assistant, with audiovisual checks, a skill marketplace, and editable projects.
-- **[v1.7.27](https://github.com/glanderness/BeefTV/releases/tag/v1.7.27)** — Standardize Music 3.0 output on MP3 and improve music generation connections and desktop update downloads.
-
-[All releases and detailed notes](https://github.com/glanderness/BeefTV/releases)
 
 ## Product demo
 

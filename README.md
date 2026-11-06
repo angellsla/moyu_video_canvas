@@ -16,19 +16,18 @@
 
 <p align="center">
   <a href="https://github.com/glanderness/BeefTV/stargazers"><img src="https://img.shields.io/github/stars/glanderness/BeefTV?style=flat-square&amp;logo=github&amp;label=Stars&amp;labelColor=303030&amp;color=E86C36" alt="墨羽Canvas GitHub Stars"></a>
-  <a href="https://github.com/glanderness/BeefTV/releases/latest"><img src="https://img.shields.io/github/v/release/glanderness/BeefTV?style=flat-square&amp;label=Release&amp;labelColor=303030&amp;color=525252" alt="墨羽Canvas 最新版本"></a>
+  <a href="https://github.com/angellsla/moyu_video_canvas/releases/latest"><img src="https://img.shields.io/github/v/release/angellsla/moyu_video_canvas?style=flat-square&amp;label=Release&amp;labelColor=303030&amp;color=525252" alt="墨羽Canvas 最新版本"></a>
   <a href="QUICKSTART.md#下载与首次打开"><img src="https://img.shields.io/badge/Desktop-macOS%20%7C%20Windows-525252?style=flat-square&amp;labelColor=303030" alt="桌面版支持 macOS 和 Windows"></a>
   <a href="QUICKSTART.md"><img src="https://img.shields.io/badge/Workspace-Local--first-525252?style=flat-square&amp;labelColor=303030" alt="本地优先工作区"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Source%20Available-525252?style=flat-square&amp;labelColor=303030" alt="源码可用，许可范围见 LICENSE"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/glanderness/BeefTV/releases/latest"><img src="assets/readme/button-download.svg" width="175" alt="下载墨羽Canvas桌面版"></a>
+  <a href="https://github.com/angellsla/moyu_video_canvas/releases/latest"><img src="assets/readme/button-download.svg" width="175" alt="下载墨羽Canvas桌面版"></a>
 </p>
 
 <p align="center">
   <a href="README.en.md">English</a> ·
-  <a href="#最近更新">最近更新</a> ·
   <a href="#产品演示">产品演示</a> ·
   <a href="#工作流">工作流</a> ·
   <a href="#agent">Agent</a> ·
@@ -37,16 +36,6 @@
   <a href="QUICKSTART.md">开始使用</a> ·
   <a href="CONTRIBUTING.md">参与贡献</a>
 </p>
-
-## 最近更新
-
-- **[v2.0.3](https://github.com/glanderness/BeefTV/releases/tag/v2.0.3)** — 优化视频提示词与素材引用校验，修复重试参数恢复，并改善超分请求稳定性。
-- **[v2.0.2](https://github.com/glanderness/BeefTV/releases/tag/v2.0.2)** — 新增 Seedream 图层拆分与关联组图，改进 Agent 多图检查、任务恢复与素材上传。
-- **[v2.0.1](https://github.com/glanderness/BeefTV/releases/tag/v2.0.1)** — 新增可复用工作流与 Topaz 超分，完善技能的固定版本安装、回退和私人改写。
-- **[v2.0.0](https://github.com/glanderness/BeefTV/releases/tag/v2.0.0)** — 创作助手贯通分镜方案、制作与成片导出，加入影音检查和技能市场，保留可编辑工程。
-- **[v1.7.27](https://github.com/glanderness/BeefTV/releases/tag/v1.7.27)** — 统一 Music 3.0 的 MP3 输出，改善音乐生成连接稳定性与桌面更新下载。
-
-[查看全部版本与详细说明](https://github.com/glanderness/BeefTV/releases)
 
 ## 产品演示
 
