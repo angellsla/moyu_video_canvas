@@ -590,6 +590,8 @@ export function LanSharingPane() {
 
     const peerLocations = useMemo(() => decodePeerLocations(discovered, trusted), [discovered, trusted]);
     const resourceOptions = resources.map((resource) => ({ value: resource.id, label: `${resourceLabel(resource)} · ${resource.id}` }));
+    const listeningEndpoints = status?.endpoints?.length ? status.endpoints : status?.endpoint ? [status.endpoint] : [];
+    const advertisedEndpoints = new Set(status?.advertisedEndpoints ?? []);
 
     return (
         <div className="settings-pane space-y-5">
@@ -641,7 +643,19 @@ export function LanSharingPane() {
                         保存名称
                     </Button>
                 </form>
-                {status?.endpoint ? <div className="break-all text-sm text-foreground/60">监听地址：{status.endpoint}</div> : null}
+                {listeningEndpoints.length > 0 ? (
+                    <div className="space-y-1 text-sm text-foreground/60">
+                        <div>监听地址</div>
+                        <ul className="space-y-1">
+                            {listeningEndpoints.map((endpoint) => (
+                                <li key={endpoint} className="flex min-w-0 flex-wrap gap-x-2">
+                                    <code className="break-all text-foreground">{endpoint}</code>
+                                    <span>{advertisedEndpoints.has(endpoint) ? "mDNS 已发布" : "需手动输入地址"}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                ) : null}
                 {status?.enabled && status.pairingCode ? (
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-[var(--r-sm)] border border-border px-3 py-2">
                         <span className="text-sm text-foreground/65">配对码</span>

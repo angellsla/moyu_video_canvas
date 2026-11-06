@@ -184,9 +184,9 @@ MiniMax speech 的 OpenAI 音频兼容目录通过 `audioOptions` 提供官方�
 
 ### 局域网共享
 
-仅桌面 profile 注册 `/lan-sharing/*`。服务默认关闭，用户显式启动后监听 RFC1918 私有 IPv4 上的 TLS/TCP 端口；mDNS 仅作为发现提示，广告或组播不可用时保留监听端口并允许手动输入对端指纹、地址、端口和一次性配对码。配对通过 Ed25519 节点指纹固定 TLS 对端身份，发现本身不会建立信任；撤销信任后新连接及后续请求会被拒绝。共享内容不经过桌面业务 API 转发到其他设备。
+仅桌面 profile 注册 `/lan-sharing/*`。服务默认关闭，用户显式启动后在所有可用网卡的 RFC1918 私有 IPv4 地址上监听 TLS/TCP；支持多播的网卡分别发布 mDNS。组播仅在各网卡所在链路发送，不会默认跨子网转发。虚拟网卡和 VPN 网卡如具备私有 IPv4 地址也可能参与监听，需由系统防火墙控制实际可达范围。mDNS 仅作为发现提示，广告或组播不可用时保留监听端口并允许手动输入对端指纹、地址、端口和一次性配对码。配对通过 Ed25519 节点指纹固定 TLS 对端身份，发现本身不会建立信任；撤销信任后新连接及后续请求会被拒绝。共享内容不经过桌面业务 API 转发到其他设备。
 
-`GET /lan-sharing/status` 返回本机节点指纹、显示名称 `nickname`、服务状态、监听地址及有效配对码。`PUT /lan-sharing/nickname` 接收 `{nickname}` 设置本机显示名称，最多 80 个字符；提交空字符串会清除自定义名称并回退系统设备名称。名称只用于显示，不改变公钥指纹身份；服务运行中时 mDNS 广告立即更新。可信设备记录中的 `nickname` 是用户给对端设置的本地备注，与本机名称相互独立。`POST /lan-sharing/start` 和 `/stop` 显式控制 peer 监听；`GET /lan-sharing/peers` 返回已发现设备与可信设备（含最后已知地址）；`POST /lan-sharing/pair` 接收 `{peerId,address,port,pairingCode,nickname}`；`DELETE /lan-sharing/peers/:peerId` 撤销互信。
+`GET /lan-sharing/status` 返回本机节点指纹、显示名称 `nickname`、服务状态、主监听地址 `endpoint`、全部监听地址 `endpoints`、成功发布 mDNS 的地址 `advertisedEndpoints` 及有效配对码。所有地址使用同一监听端口；某地址未出现在 `advertisedEndpoints` 时仍可通过手动输入地址配对。`PUT /lan-sharing/nickname` 接收 `{nickname}` 设置本机显示名称，最多 80 个字符；提交空字符串会清除自定义名称并回退系统设备名称。名称只用于显示，不改变公钥指纹身份；服务运行中时 mDNS 广告立即更新。可信设备记录中的 `nickname` 是用户给对端设置的本地备注，与本机名称相互独立。`POST /lan-sharing/start` 和 `/stop` 显式控制 peer 监听；`GET /lan-sharing/peers` 返回已发现设备与可信设备（含最后已知地址）；`POST /lan-sharing/pair` 接收 `{peerId,address,port,pairingCode,nickname}`；`DELETE /lan-sharing/peers/:peerId` 撤销互信。
 
 `GET /lan-sharing/catalogs` 与 `POST /lan-sharing/catalogs` 列出或创建清单；摘要中的 `updateCount` 是已同步的 Yjs 更新记录数，不代表当前资产条目数。`GET /lan-sharing/catalogs/:catalogId/updates?after=&limit=` 读取分页 Yjs 更新；`POST` 接收 `{updateBase64}`，后端去重持久化并同步给在线可信节点，离线节点在恢复连接后按周期重试同步。前端本地未确认的 Yjs 更新会保存在按用户 scope 隔离的浏览器存储中，后端成功接受后才清除待发队列。
 

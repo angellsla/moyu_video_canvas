@@ -9,7 +9,7 @@ export class ExportIntegrityError extends Error {
 
     constructor(missingFiles: MissingExportFile[]) {
         const unique = uniqueMissingExportFiles(missingFiles);
-        super(`导出未完成：缺少 ${unique.length} 个文件，未生成不完整的备份。请找回以下文件后重试：\n${unique.map((item) => `${item.owner}：${item.reference}`).join("\n")}`);
+        super(`导出未完成：缺少 ${unique.length} 个文件，未生成不完整的导出包。请找回以下文件后重试：\n${unique.map((item) => `${item.owner}：${item.reference}`).join("\n")}`);
         this.name = "ExportIntegrityError";
         this.missingFiles = unique;
     }

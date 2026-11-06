@@ -471,6 +471,71 @@ func (m *Manager) collaborationTargets(ctx context.Context, canvasID, excludePee
 	return targets
 }
 
+type collaborationEndpoint struct {
+	address string
+	port    int
+}
+
+func (m *Manager) collaborationPeerEndpoints(peer PeerSummary) []collaborationEndpoint {
+	var discoveredAddresses []string
+	port := peer.Port
+	for _, discovered := range m.DiscoveredPeers() {
+		if discovered.ID != peer.PeerID || len(discovered.Addresses) == 0 {
+			continue
+		}
+		discoveredAddresses = discovered.Addresses
+		port = discovered.Port
+		break
+	}
+	var endpoints []collaborationEndpoint
+	seen := make(map[string]bool)
+	add := func(address string, port int) {
+		ip := net.ParseIP(strings.TrimSpace(address))
+		if !isPrivateLANAddress(ip) || ip.To4() == nil || port < 1 || port > 65535 {
+			return
+		}
+		key := net.JoinHostPort(ip.String(), fmt.Sprint(port))
+		if !seen[key] {
+			seen[key] = true
+			endpoints = append(endpoints, collaborationEndpoint{ip.String(), port})
+		}
+	}
+	for _, address := range discoveredAddresses {
+		if address == peer.Address {
+			add(address, port)
+			break
+		}
+	}
+	for _, address := range discoveredAddresses {
+		add(address, port)
+	}
+	add(peer.Address, peer.Port)
+	if m.peerStreams != nil {
+		connection := m.peerStreams.outboundFor(peer.PeerID)
+		connection.mu.Lock()
+		active := connection.endpoint
+		connected := connection.conn != nil
+		connection.mu.Unlock()
+		if connected {
+			for index, endpoint := range endpoints {
+				if active == "wss://"+net.JoinHostPort(endpoint.address, fmt.Sprint(endpoint.port))+"/collaboration/stream" {
+					endpoints[0], endpoints[index] = endpoints[index], endpoints[0]
+					break
+				}
+			}
+		}
+	}
+	return endpoints
+}
+
+func (m *Manager) collaborationPeerEndpoint(peer PeerSummary) (string, int) {
+	endpoints := m.collaborationPeerEndpoints(peer)
+	if len(endpoints) == 0 {
+		return "", 0
+	}
+	return endpoints[0].address, endpoints[0].port
+}
+
 func (m *Manager) broadcastCollaborationPresence(ctx context.Context, canvasID, originNodeID string, state json.RawMessage, excludePeerID string) {
 	peers := m.collaborationTargets(ctx, canvasID, excludePeerID)
 	payload, err := json.Marshal(map[string]any{"canvasId": canvasID, "originNodeId": originNodeID, "state": state})
@@ -478,24 +543,23 @@ func (m *Manager) broadcastCollaborationPresence(ctx context.Context, canvasID, 
 		return
 	}
 	for _, peer := range peers {
-		address := peer.Address
-		port := peer.Port
-		for _, discovered := range m.DiscoveredPeers() {
-			if discovered.ID == peer.PeerID && len(discovered.Addresses) > 0 {
-				address, port = discovered.Addresses[0], discovered.Port
-				break
-			}
-		}
-		ip := net.ParseIP(strings.TrimSpace(address))
-		if ip == nil || ip.To4() == nil || !isPrivateLANAddress(ip) || port < 1 || port > 65535 {
+		endpoints := m.collaborationPeerEndpoints(peer)
+		if len(endpoints) == 0 {
 			continue
 		}
-		go func(peerID, address string, port int) {
+		go func(peerID string, endpoints []collaborationEndpoint) {
 			frame := collaborationPeerFrame{Type: "presence", CanvasID: canvasID, OriginNodeID: originNodeID, State: state}
-			if err := m.sendPeerCollaborationFrame(peerID, address, port, frame); err != nil {
-				m.postCollaborationPresence(peerID, address, port, payload)
+			for _, endpoint := range endpoints {
+				if m.sendPeerCollaborationFrame(peerID, endpoint.address, endpoint.port, frame) == nil {
+					return
+				}
 			}
-		}(peer.PeerID, ip.String(), port)
+			for _, endpoint := range endpoints {
+				if m.postCollaborationPresence(peerID, endpoint.address, endpoint.port, payload) {
+					return
+				}
+			}
+		}(peer.PeerID, endpoints)
 	}
 }
 
@@ -506,70 +570,71 @@ func (m *Manager) broadcastCollaborationUpdate(ctx context.Context, canvasID str
 		return
 	}
 	for _, peer := range peers {
-		address := peer.Address
-		port := peer.Port
-		for _, discovered := range m.DiscoveredPeers() {
-			if discovered.ID == peer.PeerID && len(discovered.Addresses) > 0 {
-				address, port = discovered.Addresses[0], discovered.Port
-				break
-			}
-		}
-		ip := net.ParseIP(strings.TrimSpace(address))
-		if ip == nil || ip.To4() == nil || !isPrivateLANAddress(ip) || port < 1 || port > 65535 {
+		endpoints := m.collaborationPeerEndpoints(peer)
+		if len(endpoints) == 0 {
 			continue
 		}
-		go func(peerID, address string, port int) {
+		go func(peerID string, endpoints []collaborationEndpoint) {
 			frame := collaborationPeerFrame{Type: "update", CanvasID: canvasID, OriginNodeID: originNodeID, UpdateBase64: base64.StdEncoding.EncodeToString(update)}
-			if err := m.sendPeerCollaborationFrame(peerID, address, port, frame); err != nil {
-				m.postCollaborationUpdate(peerID, address, port, canvasID, payload)
+			for _, endpoint := range endpoints {
+				if m.sendPeerCollaborationFrame(peerID, endpoint.address, endpoint.port, frame) == nil {
+					return
+				}
 			}
-		}(peer.PeerID, ip.String(), port)
+			for _, endpoint := range endpoints {
+				if m.postCollaborationUpdate(peerID, endpoint.address, endpoint.port, canvasID, payload) {
+					return
+				}
+			}
+		}(peer.PeerID, endpoints)
 	}
 }
 
-func (m *Manager) postCollaborationUpdate(peerID, address string, port int, canvasID string, payload []byte) {
+func (m *Manager) postCollaborationUpdate(peerID, address string, port int, canvasID string, payload []byte) bool {
 	if !m.Status().Enabled || !m.isTrusted(peerID) {
-		return
+		return false
 	}
 	config, err := m.identity.ClientTLSConfig(peerID)
 	if err != nil {
-		return
+		return false
 	}
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: config, ForceAttemptHTTP2: false}, Timeout: 5 * time.Second}
 	defer client.CloseIdleConnections()
 	endpoint := "https://" + net.JoinHostPort(address, fmt.Sprint(port)) + "/collaboration/canvases/" + url.PathEscape(canvasID) + "/updates"
 	req, err := http.NewRequestWithContext(m.syncContext, http.MethodPost, endpoint, strings.NewReader(string(payload)))
 	if err != nil {
-		return
+		return false
 	}
 	req.Header.Set("Content-Type", "application/json")
 	response, err := client.Do(req)
 	if err != nil {
-		return
+		return false
 	}
 	_ = response.Body.Close()
+	return response.StatusCode >= 200 && response.StatusCode < 300
 }
 
-func (m *Manager) postCollaborationPresence(peerID, address string, port int, payload []byte) {
+func (m *Manager) postCollaborationPresence(peerID, address string, port int, payload []byte) bool {
 	if !m.Status().Enabled || !m.isTrusted(peerID) {
-		return
+		return false
 	}
 	config, err := m.identity.ClientTLSConfig(peerID)
 	if err != nil {
-		return
+		return false
 	}
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: config, ForceAttemptHTTP2: false}, Timeout: 2 * time.Second}
 	defer client.CloseIdleConnections()
 	req, err := http.NewRequestWithContext(m.syncContext, http.MethodPost, "https://"+net.JoinHostPort(address, fmt.Sprint(port))+"/collaboration/presence", strings.NewReader(string(payload)))
 	if err != nil {
-		return
+		return false
 	}
 	req.Header.Set("Content-Type", "application/json")
 	response, err := client.Do(req)
 	if err != nil {
-		return
+		return false
 	}
 	_ = response.Body.Close()
+	return response.StatusCode >= 200 && response.StatusCode < 300
 }
 
 func (h *collaborationHub) add(client *collaborationStreamClient) int {

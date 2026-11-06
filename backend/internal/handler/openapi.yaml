@@ -34,9 +34,9 @@ paths:
     get:
       tags: [lan-sharing]
       summary: 读取本机局域网共享状态
-      description: 仅桌面配置注册此路由；返回稳定节点指纹、本机设备显示名称、运行状态、监听地址及有效的一次性配对码。nickname 为空时为系统设备名称。
+      description: 仅桌面配置注册此路由；返回稳定节点指纹、本机设备显示名称、运行状态、主监听地址、实际成功监听的私有 IPv4 地址、成功发布 mDNS 的地址及有效的一次性配对码。nickname 为空时为系统设备名称。mDNS 组播逐网卡发布，不会默认跨子网转发。
       responses:
-        "200": { description: 信封 data 为局域网共享状态，包含 nodeId、nickname、enabled、endpoint、pairingCode 和 pairingCodeExpiresAt }
+        "200": { description: 信封 data 为局域网共享状态，包含 nodeId、nickname、enabled、endpoint、endpoints、advertisedEndpoints、pairingCode 和 pairingCodeExpiresAt }
         "403": { description: 需要受信任的桌面界面 }
   /lan-sharing/nickname:
     put:

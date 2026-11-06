@@ -278,13 +278,28 @@ export async function retrySharedCanvasAssetTransfer(catalogId: string, hashes: 
     };
 }
 
-function peerLocations(trusted: LanSharingTrustedPeer[]) {
-    const result = new Map<string, { peerId: string; address: string; port: number }>();
-    for (const peer of trusted) if (peer.address && peer.port) result.set(peer.peerId, { peerId: peer.peerId, address: peer.address, port: peer.port });
-    return [...result.values()];
+export function sharedCanvasPeerLocations(
+    trusted: Pick<LanSharingTrustedPeer, "peerId" | "address" | "port">[],
+    discovered: Pick<LanSharingPeer, "peerId" | "address" | "port">[],
+) {
+    const result: { peerId: string; address: string; port: number }[] = [];
+    for (const peer of trusted) {
+        const active = discovered.filter((candidate) => candidate.peerId === peer.peerId && candidate.address && candidate.port);
+        const saved = peer.address && peer.port ? { peerId: peer.peerId, address: peer.address, port: peer.port } : undefined;
+        const savedIsActive = saved && active.some((candidate) => candidate.address === saved.address && candidate.port === saved.port);
+        const candidates = [...(savedIsActive && saved ? [saved] : []), ...active, ...(saved ? [saved] : [])];
+        const seen = new Set<string>();
+        for (const candidate of candidates) {
+            const key = `${candidate.address}:${candidate.port}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            result.push({ peerId: peer.peerId, address: candidate.address, port: candidate.port });
+        }
+    }
+    return result;
 }
 
-async function ensureCatalogEntryLocal(catalogId: string, entry: SharedCanvasEntry, peers: ReturnType<typeof peerLocations>) {
+async function ensureCatalogEntryLocal(catalogId: string, entry: SharedCanvasEntry, peers: ReturnType<typeof sharedCanvasPeerLocations>) {
     const bindings = await getBindings();
     const existingId = bindings[catalogId]?.[entry.contentHash];
     if (existingId && await localResourceExists(existingId)) return existingId;
@@ -345,7 +360,7 @@ export async function prepareSharedCanvasLocalAssetValues(catalogId: string, has
     if (!missing.length) return known;
     const [catalog, peerResponse] = await Promise.all([syncSharedCanvasCatalog(catalogId), getLanSharingPeers()]);
     const entries = catalog.listEntries();
-    const peers = peerLocations(peerResponse.trusted);
+    const peers = sharedCanvasPeerLocations(peerResponse.trusted, peerResponse.discovered);
     for (const hash of missing) {
         const entry = entries.find((candidate) => candidate.contentHash === hash);
         if (!entry) continue;

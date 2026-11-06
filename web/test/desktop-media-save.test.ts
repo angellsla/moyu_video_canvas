@@ -182,13 +182,15 @@ describe("native video export resource save", () => {
     test("large archive passes only owned references and small metadata, without uploading a backup", async () => {
         const expected = nativeVideoSave();
         const blob = new Blob([new Uint8Array(33 * 1024 * 1024)], { type: "application/zip" });
+        const mediaHash = "a".repeat(64);
+        const metadataHash = "b".repeat(64);
         apiClient.defaults.adapter = async () => { throw new Error("archive must not be uploaded"); };
         window.go!.main!.DesktopApp!.SaveOwnedArchive = async (name, entries) => {
             expect(name).toBe("画布.zip");
-            expect(entries).toEqual([{ name: "projects.json", data: Buffer.from('{"projects":[]}').toString("base64") }, { name: "media/video.mp4", resourceId: "owned-video" }]);
+            expect(entries).toEqual([{ name: "projects.json", data: Buffer.from('{"projects":[]}').toString("base64"), sha256: metadataHash }, { name: "media/video.mp4", resourceId: "owned-video", sha256: mediaHash }]);
             return false;
         };
-        expect(await saveOwnedNativeArchiveFiles("画布.zip", [{ name: "projects.json", data: '{"projects":[]}' }, { name: "media/video.mp4", data: blob, resourceId: "owned-video" }], expected)).toBe("cancelled");
+        expect(await saveOwnedNativeArchiveFiles("画布.zip", [{ name: "projects.json", data: '{"projects":[]}', sha256: metadataHash }, { name: "media/video.mp4", data: blob, resourceId: "owned-video", sha256: mediaHash }], expected)).toBe("cancelled");
     });
     test("33 MiB uploads real multipart Blob and saves the returned owned resource", async () => {
         const saved: Array<[string, string]> = [];

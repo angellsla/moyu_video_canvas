@@ -2,6 +2,7 @@ package lansharing
 
 import (
 	"context"
+	"errors"
 	"net"
 	"strings"
 	"testing"
@@ -58,6 +59,70 @@ func TestSelectPrivateEndpointPrefersMulticastButAllowsManualOnlyInterface(t *te
 	}
 }
 
+func TestSelectPrivateEndpointsIncludesEveryEligibleAddress(t *testing.T) {
+	interfaces := []net.Interface{
+		{Index: 1, Name: "ethernet", Flags: net.FlagUp | net.FlagMulticast},
+		{Index: 2, Name: "wifi", Flags: net.FlagUp | net.FlagMulticast},
+		{Index: 3, Name: "manual-only", Flags: net.FlagUp},
+		{Index: 4, Name: "down", Flags: net.FlagMulticast},
+		{Index: 5, Name: "loopback", Flags: net.FlagUp | net.FlagLoopback},
+	}
+	addresses := map[string][]net.Addr{
+		"ethernet": {
+			&net.IPNet{IP: net.ParseIP("192.168.4.22"), Mask: net.CIDRMask(24, 32)},
+			&net.IPNet{IP: net.ParseIP("192.168.5.22"), Mask: net.CIDRMask(24, 32)},
+			&net.IPNet{IP: net.ParseIP("169.254.4.22"), Mask: net.CIDRMask(16, 32)},
+		},
+		"wifi": {
+			&net.IPNet{IP: net.ParseIP("10.20.30.40"), Mask: net.CIDRMask(24, 32)},
+			&net.IPNet{IP: net.ParseIP("192.168.4.22"), Mask: net.CIDRMask(24, 32)},
+			&net.IPNet{IP: net.ParseIP("8.8.8.8"), Mask: net.CIDRMask(24, 32)},
+		},
+		"manual-only": {&net.IPNet{IP: net.ParseIP("172.20.1.5"), Mask: net.CIDRMask(16, 32)}},
+		"down":        {&net.IPNet{IP: net.ParseIP("10.1.1.1"), Mask: net.CIDRMask(24, 32)}},
+		"loopback":    {&net.IPNet{IP: net.ParseIP("10.2.2.2"), Mask: net.CIDRMask(24, 32)}},
+	}
+	endpoints, err := selectPrivateEndpoints(interfaces, func(iface net.Interface) ([]net.Addr, error) {
+		return addresses[iface.Name], nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct{ name, address string }{
+		{"ethernet", "192.168.4.22"},
+		{"ethernet", "192.168.5.22"},
+		{"wifi", "10.20.30.40"},
+		{"manual-only", "172.20.1.5"},
+	}
+	if len(endpoints) != len(want) {
+		t.Fatalf("endpoints = %#v, want %d unique private endpoints", endpoints, len(want))
+	}
+	for i, endpoint := range endpoints {
+		if endpoint.Interface.Name != want[i].name || endpoint.Address.String() != want[i].address {
+			t.Fatalf("endpoint %d = %#v, want %s on %s", i, endpoint, want[i].address, want[i].name)
+		}
+	}
+}
+
+func TestSelectPrivateEndpointsHandlesMissingOrFailedAddressLookup(t *testing.T) {
+	interfaces := []net.Interface{{Index: 1, Name: "failed", Flags: net.FlagUp}, {Index: 2, Name: "working", Flags: net.FlagUp}}
+	if _, err := selectPrivateEndpoints(interfaces, nil); err == nil {
+		t.Fatal("nil address lookup should fail")
+	}
+	endpoints, err := selectPrivateEndpoints(interfaces, func(iface net.Interface) ([]net.Addr, error) {
+		if iface.Name == "failed" {
+			return nil, errors.New("adapter disappeared")
+		}
+		return []net.Addr{&net.IPNet{IP: net.ParseIP("10.20.30.40"), Mask: net.CIDRMask(24, 32)}}, nil
+	})
+	if err != nil || len(endpoints) != 1 || endpoints[0].Address.String() != "10.20.30.40" {
+		t.Fatalf("endpoints = %#v, err = %v; want working adapter despite failed lookup", endpoints, err)
+	}
+	if _, err := selectPrivateEndpoints(interfaces[:1], func(net.Interface) ([]net.Addr, error) { return nil, errors.New("adapter disappeared") }); err == nil {
+		t.Fatal("no usable private endpoints should fail")
+	}
+}
+
 func TestPeerFromEntryRequiresValidPrivatePeerDescriptor(t *testing.T) {
 	entry := &zeroconf.ServiceEntry{
 		ServiceRecord: zeroconf.ServiceRecord{Instance: "BeefTV-room._beeftv-share._tcp.local."},
@@ -79,6 +144,21 @@ func TestPeerFromEntryRequiresValidPrivatePeerDescriptor(t *testing.T) {
 	entry.Text[1] = "version=2"
 	if _, ok := peerFromEntry(entry); ok {
 		t.Fatal("unsupported protocol version was accepted")
+	}
+}
+
+func TestPeerFromEntryPreservesAddressesFromMultipleLANs(t *testing.T) {
+	entry := &zeroconf.ServiceEntry{
+		Port:     44321,
+		Text:     []string{"id=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "version=1"},
+		AddrIPv4: []net.IP{net.ParseIP("192.168.4.22"), net.ParseIP("10.20.30.40"), net.ParseIP("169.254.1.5"), net.ParseIP("8.8.8.8")},
+	}
+	peer, ok := peerFromEntry(entry)
+	if !ok {
+		t.Fatal("expected a peer on multiple private LANs")
+	}
+	if len(peer.Addresses) != 2 || peer.Addresses[0] != "192.168.4.22" || peer.Addresses[1] != "10.20.30.40" {
+		t.Fatalf("peer addresses = %v, want both private LAN addresses", peer.Addresses)
 	}
 }
 

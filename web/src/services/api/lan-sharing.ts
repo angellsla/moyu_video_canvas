@@ -8,6 +8,8 @@ export type LanSharingStatus = {
     pairingCode?: string;
     pairingCodeExpiresAt?: string;
     endpoint?: string;
+    endpoints?: string[];
+    advertisedEndpoints?: string[];
 };
 
 export type LanSharingPeer = {

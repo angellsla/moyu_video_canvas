@@ -61,24 +61,24 @@ export async function saveOwnedOrBrowserVideoBlob(fileName: string, blob: Blob, 
 
 export async function saveOwnedNativeArchiveFiles(
     fileName: string,
-    files: Array<{ name: string; data: BlobPart; resourceId?: string }>,
+    files: Array<{ name: string; data: BlobPart; resourceId?: string; sha256?: string }>,
     expected: CapturedUserScope,
     options: { signal?: AbortSignal; onSaving?: () => void } = {},
 ): Promise<OwnedMediaSaveResult | undefined> {
     const save = typeof window === "undefined" ? undefined : window.go?.main?.DesktopApp?.SaveOwnedArchive;
     if (!save) return undefined;
-    const entries: Array<{ name: string; resourceId?: string; data?: string }> = [];
+    const entries: Array<{ name: string; resourceId?: string; data?: string; sha256?: string }> = [];
     let inlineBytes = 0;
     for (const file of files) {
         options.signal?.throwIfAborted();
         assertUserScope(expected);
         if (file.resourceId) {
-            entries.push({ name: file.name, resourceId: file.resourceId });
+            entries.push({ name: file.name, resourceId: file.resourceId, ...(file.sha256 ? { sha256: file.sha256 } : {}) });
         } else {
             const blob = new Blob([file.data]);
             inlineBytes += blob.size;
             if (inlineBytes > MAX_OWNED_ARTIFACT_BYTES) throw new Error("本地附加文件过大，请先保存素材后再导出");
-            entries.push({ name: file.name, data: bytesToBase64(new Uint8Array(await blob.arrayBuffer())) });
+            entries.push({ name: file.name, data: bytesToBase64(new Uint8Array(await blob.arrayBuffer())), ...(file.sha256 ? { sha256: file.sha256 } : {}) });
         }
     }
     options.signal?.throwIfAborted();

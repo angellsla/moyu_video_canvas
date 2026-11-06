@@ -5,7 +5,11 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"net"
 	"net/http"
+	"slices"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -84,6 +88,100 @@ func TestLocalNicknamePersistsAndBlankUsesSystemName(t *testing.T) {
 	}
 }
 
+func TestRoutedLocalEndpointUsesMatchingPrivateListener(t *testing.T) {
+	available, err := FindPrivateEndpoints()
+	if err != nil {
+		t.Skipf("private LAN adapters unavailable: %v", err)
+	}
+	const port = 42317
+	listeners := make([]string, 0, len(available))
+	for _, endpoint := range available {
+		listeners = append(listeners, net.JoinHostPort(endpoint.Address.String(), strconv.Itoa(port)))
+	}
+	for _, endpoint := range available {
+		address, selectedPort, err := routedLocalEndpoint(endpoint.Address, port, listeners)
+		if err != nil {
+			t.Fatalf("select route to %s: %v", endpoint.Address, err)
+		}
+		if address != endpoint.Address.String() || selectedPort != port {
+			t.Fatalf("route to %s selected %s:%d, want same interface and port %d", endpoint.Address, address, selectedPort, port)
+		}
+	}
+	if _, _, err := routedLocalEndpoint(available[0].Address, port, nil); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("route without a bound listener error = %v, want invalid endpoint", err)
+	}
+}
+
+func TestDiscoveredPeerAggregatesInterfacesWithoutDuplicateAddresses(t *testing.T) {
+	manager := &Manager{discovered: make(map[string]Peer), discoveredAt: make(map[string]time.Time)}
+	now := time.Now()
+	id := strings.Repeat("a", 64)
+	first := Peer{ID: id, Name: "Studio", Addresses: []string{"192.168.4.22"}, Port: 42317, Version: protocol}
+	second := Peer{ID: id, Name: "Studio", Addresses: []string{"10.20.30.40"}, Port: 42317, Version: protocol}
+	if !manager.recordDiscoveredPeer(first, now) || !manager.recordDiscoveredPeer(second, now.Add(time.Second)) {
+		t.Fatal("new addresses on separate adapters should change the discovered endpoint")
+	}
+	if manager.recordDiscoveredPeer(second, now.Add(2*time.Second)) {
+		t.Fatal("repeated announcement of the same address should not change the endpoint")
+	}
+	peers := manager.DiscoveredPeers()
+	if len(peers) != 1 || peers[0].ID != id || peers[0].Port != 42317 {
+		t.Fatalf("discovered peers = %#v, want one aggregated node", peers)
+	}
+	if len(peers[0].Addresses) != 2 || !slices.Contains(peers[0].Addresses, first.Addresses[0]) || !slices.Contains(peers[0].Addresses, second.Addresses[0]) {
+		t.Fatalf("discovered addresses = %v, want both adapter addresses once", peers[0].Addresses)
+	}
+}
+
+func TestDiscoveredPeerExpiresEachInterfaceAddressSeparately(t *testing.T) {
+	manager := &Manager{discovered: make(map[string]Peer), discoveredAt: make(map[string]time.Time)}
+	now := time.Now()
+	id := strings.Repeat("b", 64)
+	first := Peer{ID: id, Addresses: []string{"192.168.4.22"}, Port: 42317, Version: protocol}
+	second := Peer{ID: id, Addresses: []string{"10.20.30.40"}, Port: 42317, Version: protocol}
+	manager.recordDiscoveredPeer(first, now.Add(-discoveredPeerTTL-10*time.Second))
+	manager.recordDiscoveredPeer(second, now.Add(-discoveredPeerTTL+15*time.Second))
+	peers := manager.DiscoveredPeers()
+	if len(peers) != 1 || len(peers[0].Addresses) != 1 || peers[0].Addresses[0] != second.Addresses[0] {
+		t.Fatalf("discovered peers = %#v, want only the fresh adapter address", peers)
+	}
+	manager.recordDiscoveredPeer(first, now.Add(-discoveredPeerTTL-10*time.Second))
+	peers = manager.DiscoveredPeers()
+	if len(peers) != 1 || len(peers[0].Addresses) != 1 || peers[0].Addresses[0] != second.Addresses[0] {
+		t.Fatalf("stale announcement should not replace fresh address: %#v", peers)
+	}
+
+	expired := &Manager{discovered: make(map[string]Peer), discoveredAt: make(map[string]time.Time)}
+	expired.recordDiscoveredPeer(first, now.Add(-discoveredPeerTTL-10*time.Second))
+	if peers := expired.DiscoveredPeers(); len(peers) != 0 {
+		t.Fatalf("expired node still discovered: %#v", peers)
+	}
+}
+
+func TestCollaborationPeerEndpointPrefersVerifiedAddressAcrossAdapters(t *testing.T) {
+	manager := &Manager{discovered: make(map[string]Peer), discoveredAt: make(map[string]time.Time)}
+	id := strings.Repeat("c", 64)
+	manager.recordDiscoveredPeer(Peer{ID: id, Addresses: []string{"192.168.44.2", "10.70.60.25", "10.70.60.25"}, Port: 42100, Version: protocol}, time.Now())
+	endpoints := manager.collaborationPeerEndpoints(PeerSummary{PeerID: id, Address: "10.70.60.25", Port: 42000})
+	want := []collaborationEndpoint{{address: "10.70.60.25", port: 42100}, {address: "192.168.44.2", port: 42100}, {address: "10.70.60.25", port: 42000}}
+	if !slices.Equal(endpoints, want) {
+		t.Fatalf("ordered collaboration endpoints = %#v, want %#v", endpoints, want)
+	}
+	address, port := manager.collaborationPeerEndpoint(PeerSummary{PeerID: id, Address: "10.70.60.25", Port: 42000})
+	if address != "10.70.60.25" || port != 42100 {
+		t.Fatalf("collaboration endpoint = %s:%d, want verified address on discovered port", address, port)
+	}
+	address, port = manager.collaborationPeerEndpoint(PeerSummary{PeerID: id, Address: "10.70.60.99", Port: 42000})
+	if address != "192.168.44.2" || port != 42100 {
+		t.Fatalf("collaboration fallback = %s:%d, want first discovered address", address, port)
+	}
+	endpoints = manager.collaborationPeerEndpoints(PeerSummary{PeerID: id, Address: "10.70.60.99", Port: 42000})
+	want = []collaborationEndpoint{{address: "192.168.44.2", port: 42100}, {address: "10.70.60.25", port: 42100}, {address: "10.70.60.99", port: 42000}}
+	if !slices.Equal(endpoints, want) {
+		t.Fatalf("saved-address fallback endpoints = %#v, want %#v", endpoints, want)
+	}
+}
+
 func TestTrustCanBeRevokedAndCatalogUpdatesAreDeduplicated(t *testing.T) {
 	db, manager := newTestManager(t)
 	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
@@ -152,6 +250,44 @@ func TestScheduledSyncDoesNotPersistUnverifiedDiscoveredEndpoint(t *testing.T) {
 	}
 	if peer.Address != "10.0.0.2" || peer.Port != 47000 {
 		t.Fatalf("unverified endpoint persisted as %s:%d", peer.Address, peer.Port)
+	}
+}
+
+func TestCatalogSyncJobTriesDistinctAddressesAfterFailure(t *testing.T) {
+	first := catalogSyncEndpoint{address: "192.168.44.2", port: 42100}
+	second := catalogSyncEndpoint{address: "10.70.60.25", port: 42100}
+	job := &catalogSyncJob{current: first}
+	job.enqueue(second)
+	job.enqueue(second)
+	if len(job.pending) != 1 || job.pending[0] != second {
+		t.Fatalf("pending sync endpoints = %#v, want the second adapter once", job.pending)
+	}
+	if !job.nextAfter(errors.New("first adapter unreachable")) || job.current != second {
+		t.Fatalf("failed endpoint did not fall back to second adapter: %#v", job)
+	}
+	if job.nextAfter(nil) {
+		t.Fatal("successful sync should not repeat a queued adapter")
+	}
+}
+
+func TestCatalogSyncJobRetriesCurrentAddressWhenNewWorkArrives(t *testing.T) {
+	endpoint := catalogSyncEndpoint{address: "10.70.60.25", port: 42100}
+	job := &catalogSyncJob{current: endpoint}
+	job.enqueue(endpoint)
+	if !job.nextAfter(nil) || job.current != endpoint {
+		t.Fatal("new work arriving during sync should trigger another pass")
+	}
+	if job.nextAfter(nil) {
+		t.Fatal("sync job should finish after the follow-up pass")
+	}
+	other := catalogSyncEndpoint{address: "192.168.44.2", port: 42100}
+	job.enqueue(other)
+	job.enqueue(endpoint)
+	if !job.nextAfter(errors.New("current adapter unreachable")) || job.current != other {
+		t.Fatal("another adapter should be tried before repeating a failed current adapter")
+	}
+	if !job.nextAfter(errors.New("other adapter unreachable")) || job.current != endpoint {
+		t.Fatal("new work on current adapter was lost after both adapters failed")
 	}
 }
 

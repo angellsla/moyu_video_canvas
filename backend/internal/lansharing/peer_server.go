@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -17,10 +19,10 @@ type PeerServer struct {
 	isTrusted func(string) bool
 	handler   http.Handler
 	mu        sync.Mutex
-	listener  net.Listener
+	listeners []net.Listener
 	server    *http.Server
-	mdns      *zeroconf.Server
-	endpoint  PrivateEndpoint
+	mdns      map[string]*zeroconf.Server
+	endpoints []PrivateEndpoint
 	port      int
 	nickname  string
 	serveErr  chan error
@@ -33,55 +35,86 @@ func NewPeerServer(identity *Identity, isTrusted func(string) bool, handler http
 	return &PeerServer{identity: identity, isTrusted: isTrusted, handler: handler, serveErr: make(chan error, 1)}, nil
 }
 
-func (s *PeerServer) Start() (PrivateEndpoint, int, error) {
+func (s *PeerServer) Start() ([]PrivateEndpoint, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.listener != nil {
-		addr := s.listener.Addr().(*net.TCPAddr)
-		endpoint, err := endpointFromTCPAddr(addr)
-		return endpoint, addr.Port, err
+	if len(s.listeners) > 0 {
+		return append([]PrivateEndpoint(nil), s.endpoints...), s.port, nil
 	}
-	endpoint, err := FindPrivateEndpoint()
+	endpoints, err := FindPrivateEndpoints()
 	if err != nil {
-		return PrivateEndpoint{}, 0, err
-	}
-	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: endpoint.Address.To4(), Port: 0})
-	if err != nil {
-		return PrivateEndpoint{}, 0, err
+		return nil, 0, err
 	}
 	tlsConfig, err := s.identity.ServerTLSConfig(s.isTrusted)
 	if err != nil {
-		_ = listener.Close()
-		return PrivateEndpoint{}, 0, err
+		return nil, 0, err
 	}
-	secureListener := tls.NewListener(listener, tlsConfig)
+	boundEndpoints, rawListeners, port, err := listenPrivateEndpoints(endpoints, net.ListenTCP)
+	if err != nil {
+		return nil, 0, err
+	}
+	listeners := make([]net.Listener, 0, len(rawListeners))
+	for _, listener := range rawListeners {
+		listeners = append(listeners, tls.NewListener(listener, tlsConfig))
+	}
 	server := &http.Server{
 		Handler:           s.handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       30 * time.Second,
 		MaxHeaderBytes:    32 << 10,
 	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	mdnsServer, err := Advertise(s.identity, endpoint, port, s.nickname)
-	if err != nil {
-		mdnsServer = nil
+	advertisements := make(map[string]*zeroconf.Server)
+	for _, endpoint := range boundEndpoints {
+		if endpoint.Interface.Flags&net.FlagMulticast == 0 {
+			continue
+		}
+		advertisement, advertiseErr := Advertise(s.identity, endpoint, port, s.nickname)
+		if advertiseErr == nil {
+			advertisements[endpoint.Address.String()] = advertisement
+		}
 	}
-	s.listener = secureListener
+	s.listeners = listeners
 	s.server = server
-	s.mdns = mdnsServer
-	s.endpoint = endpoint
+	s.mdns = advertisements
+	s.endpoints = boundEndpoints
 	s.port = port
-	go func() {
-		err := server.Serve(secureListener)
-		if errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
-			err = nil
+	for _, listener := range listeners {
+		go func(listener net.Listener) {
+			err := server.Serve(listener)
+			if errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
+				err = nil
+			}
+			select {
+			case s.serveErr <- err:
+			default:
+			}
+		}(listener)
+	}
+	return append([]PrivateEndpoint(nil), boundEndpoints...), port, nil
+}
+
+func listenPrivateEndpoints(endpoints []PrivateEndpoint, listen func(string, *net.TCPAddr) (*net.TCPListener, error)) ([]PrivateEndpoint, []net.Listener, int, error) {
+	var bound []PrivateEndpoint
+	var listeners []net.Listener
+	var failures []error
+	port := 0
+	for _, endpoint := range endpoints {
+		listener, err := listen("tcp4", &net.TCPAddr{IP: endpoint.Address.To4(), Port: port})
+		if err != nil {
+			failures = append(failures, fmt.Errorf("listen on %s: %w", endpoint.Address, err))
+			continue
 		}
-		select {
-		case s.serveErr <- err:
-		default:
+		port = listener.Addr().(*net.TCPAddr).Port
+		bound = append(bound, endpoint)
+		listeners = append(listeners, listener)
+	}
+	if len(listeners) == 0 {
+		if len(failures) == 0 {
+			return nil, nil, 0, errors.New("no private LAN endpoints to listen on")
 		}
-	}()
-	return endpoint, port, nil
+		return nil, nil, 0, errors.Join(failures...)
+	}
+	return bound, listeners, port, nil
 }
 
 // SetNickname updates the discovery name without restarting the TLS listener.
@@ -92,42 +125,41 @@ func (s *PeerServer) SetNickname(nickname string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.nickname = normalizeNickname(nickname)
-	if s.listener == nil {
+	if len(s.listeners) == 0 {
 		return nil
 	}
-	if s.mdns != nil {
-		s.mdns.Shutdown()
-		s.mdns = nil
+	for _, advertisement := range s.mdns {
+		advertisement.Shutdown()
 	}
-	mdnsServer, err := Advertise(s.identity, s.endpoint, s.port, s.nickname)
-	if err != nil {
-		return err
-	}
-	s.mdns = mdnsServer
-	return nil
-}
-
-func endpointFromTCPAddr(address *net.TCPAddr) (PrivateEndpoint, error) {
-	if address == nil || !isPrivateLANAddress(address.IP) {
-		return PrivateEndpoint{}, errors.New("LAN peer listener is not bound to a private interface")
-	}
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		return PrivateEndpoint{}, err
-	}
-	for _, iface := range interfaces {
-		addresses, err := iface.Addrs()
-		if err != nil {
+	s.mdns = make(map[string]*zeroconf.Server)
+	var failures []error
+	for _, endpoint := range s.endpoints {
+		if endpoint.Interface.Flags&net.FlagMulticast == 0 {
 			continue
 		}
-		for _, candidate := range addresses {
-			ip, _, err := net.ParseCIDR(candidate.String())
-			if err == nil && ip.Equal(address.IP) {
-				return PrivateEndpoint{Interface: iface, Address: ip}, nil
-			}
+		advertisement, err := Advertise(s.identity, endpoint, s.port, s.nickname)
+		if err != nil {
+			failures = append(failures, err)
+			continue
+		}
+		s.mdns[endpoint.Address.String()] = advertisement
+	}
+	return errors.Join(failures...)
+}
+
+func (s *PeerServer) EndpointStatus() ([]string, []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	endpoints := make([]string, 0, len(s.endpoints))
+	advertised := make([]string, 0, len(s.mdns))
+	for _, endpoint := range s.endpoints {
+		address := net.JoinHostPort(endpoint.Address.String(), strconv.Itoa(s.port))
+		endpoints = append(endpoints, address)
+		if s.mdns[endpoint.Address.String()] != nil {
+			advertised = append(advertised, address)
 		}
 	}
-	return PrivateEndpoint{}, errors.New("LAN peer listener interface could not be resolved")
+	return endpoints, advertised
 }
 
 func (s *PeerServer) Stop(ctx context.Context) error {
@@ -136,15 +168,15 @@ func (s *PeerServer) Stop(ctx context.Context) error {
 	}
 	s.mu.Lock()
 	server := s.server
-	mdnsServer := s.mdns
+	mdnsServers := s.mdns
 	s.server = nil
-	s.listener = nil
+	s.listeners = nil
 	s.mdns = nil
-	s.endpoint = PrivateEndpoint{}
+	s.endpoints = nil
 	s.port = 0
 	s.mu.Unlock()
-	if mdnsServer != nil {
-		mdnsServer.Shutdown()
+	for _, advertisement := range mdnsServers {
+		advertisement.Shutdown()
 	}
 	if server == nil {
 		return nil

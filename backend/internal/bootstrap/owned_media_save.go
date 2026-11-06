@@ -98,6 +98,9 @@ func writeOwnedFileWith(dest string, src *os.File, write func(io.Writer) error) 
 		return errors.New("无法写入所选位置")
 	}
 	if err := write(temporary); err != nil {
+		if errors.Is(err, errOwnedArchiveHashMismatch) {
+			return err
+		}
 		return errors.New("无法写出文件")
 	}
 	if err := temporary.Sync(); err != nil {

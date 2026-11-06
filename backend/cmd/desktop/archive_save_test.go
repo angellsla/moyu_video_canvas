@@ -5,9 +5,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"infinite-canvas/backend/internal/bootstrap"
@@ -21,7 +23,8 @@ func TestSaveOwnedArchiveStreamsLargeResourceAndMetadata(t *testing.T) {
 	resourceID := uploadDesktopResource(t, app, payload)
 	dest := filepath.Join(t.TempDir(), "canvas.zip")
 	app.chooseSavePath = func(context.Context, string) (string, error) { return dest, nil }
-	entries := []bootstrap.OwnedArchiveEntry{{Name: "projects.json", Data: []byte(`{"projects":[]}`)}, {Name: "media/video.mp4", ResourceID: resourceID}}
+	metadata := []byte(`{"projects":[]}`)
+	entries := []bootstrap.OwnedArchiveEntry{{Name: "projects.json", Data: metadata, SHA256: fmtSHA256(metadata)}, {Name: "media/video.mp4", ResourceID: resourceID, SHA256: fmtSHA256(payload)}}
 	saved, err := app.SaveOwnedArchive("canvas.zip", entries)
 	if err != nil || !saved {
 		t.Fatalf("save=%v err=%v", saved, err)
@@ -67,6 +70,8 @@ func TestSaveOwnedArchiveCancelAndInvalidReferencesKeepDestination(t *testing.T)
 		{{Name: "same", Data: []byte("a")}, {Name: "same", Data: []byte("b")}},
 		{{Name: "media/foreign.mp4", ResourceID: "not-owned"}},
 		{{Name: "media/private.mp4", ResourceID: "../private"}},
+		{{Name: "media/video.mp4", ResourceID: "not-owned", SHA256: "invalid"}},
+		{{Name: "metadata.json", Data: []byte("body"), SHA256: strings.Repeat("A", 64)}},
 	} {
 		if saved, err := app.SaveOwnedArchive("canvas.zip", entries); saved || err == nil {
 			t.Fatalf("invalid archive saved: %+v", entries)
@@ -80,4 +85,36 @@ func TestSaveOwnedArchiveCancelAndInvalidReferencesKeepDestination(t *testing.T)
 	if len(leftovers) != 0 {
 		t.Fatalf("temporary archive leaked: %v", leftovers)
 	}
+}
+
+func TestSaveOwnedArchiveHashMismatchKeepsDestination(t *testing.T) {
+	app := newDesktopApp(t.TempDir())
+	app.startup(context.Background())
+	defer app.shutdown(context.Background())
+	resourceID := uploadDesktopResource(t, app, []byte("asset bytes"))
+	dest := filepath.Join(t.TempDir(), "existing.zip")
+	if err := os.WriteFile(dest, []byte("existing"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	app.chooseSavePath = func(context.Context, string) (string, error) { return dest, nil }
+	for _, entry := range []bootstrap.OwnedArchiveEntry{
+		{Name: "media/asset.bin", ResourceID: resourceID, SHA256: fmtSHA256([]byte("other bytes"))},
+		{Name: "metadata.json", Data: []byte(`{"asset":true}`), SHA256: fmtSHA256([]byte("other metadata"))},
+	} {
+		if saved, err := app.SaveOwnedArchive("canvas.zip", []bootstrap.OwnedArchiveEntry{entry}); saved || err == nil || !strings.Contains(err.Error(), "校验失败") {
+			t.Fatalf("hash mismatch: saved=%v err=%v", saved, err)
+		}
+		body, err := os.ReadFile(dest)
+		if err != nil || string(body) != "existing" {
+			t.Fatal("existing destination changed")
+		}
+	}
+	leftovers, _ := filepath.Glob(filepath.Join(filepath.Dir(dest), ".beeftv-save-*"))
+	if len(leftovers) != 0 {
+		t.Fatalf("temporary archive leaked: %v", leftovers)
+	}
+}
+
+func fmtSHA256(body []byte) string {
+	return fmt.Sprintf("%x", sha256.Sum256(body))
 }

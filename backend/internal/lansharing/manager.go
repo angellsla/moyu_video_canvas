@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -60,6 +61,8 @@ type Status struct {
 	PairingCode          string     `json:"pairingCode,omitempty"`
 	PairingCodeExpiresAt *time.Time `json:"pairingCodeExpiresAt,omitempty"`
 	Endpoint             string     `json:"endpoint,omitempty"`
+	Endpoints            []string   `json:"endpoints,omitempty"`
+	AdvertisedEndpoints  []string   `json:"advertisedEndpoints,omitempty"`
 }
 
 type PairRequest struct {
@@ -102,10 +105,43 @@ type catalogMetadata struct {
 }
 
 type catalogSyncJob struct {
-	address string
-	port    int
+	current catalogSyncEndpoint
+	pending []catalogSyncEndpoint
 	dirty   bool
 	cancel  context.CancelFunc
+}
+
+type catalogSyncEndpoint struct {
+	address string
+	port    int
+}
+
+func (job *catalogSyncJob) enqueue(endpoint catalogSyncEndpoint) {
+	if endpoint == job.current {
+		job.dirty = true
+	} else if !slices.Contains(job.pending, endpoint) {
+		job.pending = append(job.pending, endpoint)
+	}
+}
+
+func (job *catalogSyncJob) nextAfter(err error) bool {
+	retryCurrent := job.dirty
+	job.dirty = false
+	if err == nil {
+		if retryCurrent {
+			job.pending = nil
+		}
+		return retryCurrent
+	}
+	if retryCurrent && !slices.Contains(job.pending, job.current) {
+		job.pending = append(job.pending, job.current)
+	}
+	if len(job.pending) > 0 {
+		job.current = job.pending[0]
+		job.pending = job.pending[1:]
+		return true
+	}
+	return false
 }
 
 type Manager struct {
@@ -126,9 +162,10 @@ type Manager struct {
 	pairingCode  string
 	pairingUntil time.Time
 
-	discoveryMu  sync.RWMutex
-	discovered   map[string]Peer
-	discoveredAt map[string]time.Time
+	discoveryMu         sync.RWMutex
+	discovered          map[string]Peer
+	discoveredAt        map[string]time.Time
+	discoveredAddressAt map[string]map[string]time.Time
 
 	peerHandlersMu   sync.Mutex
 	peerHandlers     map[string]http.Handler
@@ -154,7 +191,7 @@ func NewManager(dataDir string, db *gorm.DB) (*Manager, error) {
 	syncContext, syncCancel := context.WithCancel(context.Background())
 	manager := &Manager{
 		dataDir: strings.TrimSpace(dataDir), db: db, identity: identity,
-		discovered: make(map[string]Peer), discoveredAt: make(map[string]time.Time), peerHandlers: make(map[string]http.Handler),
+		discovered: make(map[string]Peer), discoveredAt: make(map[string]time.Time), discoveredAddressAt: make(map[string]map[string]time.Time), peerHandlers: make(map[string]http.Handler),
 		collaborationHub: newCollaborationHub(),
 		peerStreams:      newPeerCollaborationStreams(),
 		syncJobs:         make(map[string]*catalogSyncJob), syncContext: syncContext, syncCancel: syncCancel,
@@ -259,8 +296,9 @@ func (m *Manager) Status() Status {
 		return Status{}
 	}
 	m.mu.Lock()
-	enabled, endpoint := m.peerServer != nil, m.endpoint
+	server, endpoint := m.peerServer, m.endpoint
 	m.mu.Unlock()
+	enabled := server != nil
 	status := Status{Enabled: enabled, NodeID: m.NodeID(), Nickname: m.LocalNickname()}
 	m.pairMu.Lock()
 	if m.pairingCode != "" && time.Now().Before(m.pairingUntil) {
@@ -271,6 +309,7 @@ func (m *Manager) Status() Status {
 	m.pairMu.Unlock()
 	if enabled {
 		status.Endpoint = endpoint
+		status.Endpoints, status.AdvertisedEndpoints = server.EndpointStatus()
 	}
 	return status
 }
@@ -314,14 +353,14 @@ func (m *Manager) Start(ctx context.Context) (Status, error) {
 		m.mu.Unlock()
 		return Status{}, err
 	}
-	endpoint, port, err := server.Start()
+	endpoints, port, err := server.Start()
 	if err != nil {
 		m.clearPairingCode()
 		m.mu.Unlock()
 		return Status{}, err
 	}
 	m.peerServer = server
-	m.endpoint = net.JoinHostPort(endpoint.Address.String(), fmt.Sprint(port))
+	m.endpoint = net.JoinHostPort(endpoints[0].Address.String(), fmt.Sprint(port))
 	discoveryCtx, cancel := context.WithCancel(context.Background())
 	m.discoveryCancel = cancel
 	go m.runDiscovery(discoveryCtx)
@@ -406,11 +445,22 @@ func (m *Manager) DiscoveredPeers() []Peer {
 	m.discoveryMu.Lock()
 	peers := make([]Peer, 0, len(m.discovered))
 	for id, item := range m.discovered {
-		if now.Sub(m.discoveredAt[id]) > discoveredPeerTTL {
+		addresses := item.Addresses[:0]
+		for _, address := range item.Addresses {
+			if now.Sub(m.discoveredAddressAt[id][address]) <= discoveredPeerTTL {
+				addresses = append(addresses, address)
+			} else {
+				delete(m.discoveredAddressAt[id], address)
+			}
+		}
+		if len(addresses) == 0 {
 			delete(m.discovered, id)
 			delete(m.discoveredAt, id)
+			delete(m.discoveredAddressAt, id)
 			continue
 		}
+		item.Addresses = append([]string(nil), addresses...)
+		m.discovered[id] = item
 		peers = append(peers, item)
 	}
 	m.discoveryMu.Unlock()
@@ -442,17 +492,14 @@ func (m *Manager) PairPeer(ctx context.Context, request PairRequest) (PeerSummar
 		return PeerSummary{}, ErrInvalid
 	}
 	m.mu.Lock()
-	localEndpoint, running := m.endpoint, m.peerServer != nil
+	server := m.peerServer
 	m.mu.Unlock()
-	if !running {
+	if server == nil {
 		return PeerSummary{}, ErrInvalid
 	}
-	localAddress, localPortText, err := net.SplitHostPort(localEndpoint)
+	localEndpoints, _ := server.EndpointStatus()
+	localAddress, localPort, err := routedLocalEndpoint(address, request.Port, localEndpoints)
 	if err != nil {
-		return PeerSummary{}, ErrInvalid
-	}
-	localPort, err := strconv.Atoi(localPortText)
-	if err != nil || !validPeerEndpoint(localAddress, localPort) {
 		return PeerSummary{}, ErrInvalid
 	}
 	clientTLS, err := m.identity.ClientTLSConfig(peerID)
@@ -513,6 +560,26 @@ func (m *Manager) PairPeer(ctx context.Context, request PairRequest) (PeerSummar
 	}
 	m.scheduleCatalogSync(peerID, address.String(), request.Port)
 	return trusted, nil
+}
+
+func routedLocalEndpoint(peerIP net.IP, peerPort int, endpoints []string) (string, int, error) {
+	connection, err := net.DialUDP("udp4", nil, &net.UDPAddr{IP: peerIP.To4(), Port: peerPort})
+	if err != nil {
+		return "", 0, err
+	}
+	localIP := connection.LocalAddr().(*net.UDPAddr).IP
+	_ = connection.Close()
+	for _, endpoint := range endpoints {
+		address, portText, err := net.SplitHostPort(endpoint)
+		if err != nil || !net.ParseIP(address).Equal(localIP) {
+			continue
+		}
+		port, err := strconv.Atoi(portText)
+		if err == nil && validPeerEndpoint(address, port) {
+			return address, port, nil
+		}
+	}
+	return "", 0, ErrInvalid
 }
 
 func (m *Manager) RevokePeer(ctx context.Context, peerID string) error {
@@ -951,17 +1018,15 @@ func (m *Manager) runDiscovery(ctx context.Context) {
 			if peer.ID == m.NodeID() {
 				return
 			}
-			now := time.Now()
-			m.discoveryMu.Lock()
-			wasUnavailable := now.Sub(m.discoveredAt[peer.ID]) > discoveredPeerTTL
-			previous, existed := m.discovered[peer.ID]
-			endpointChanged := !existed || previous.Port != peer.Port || strings.Join(previous.Addresses, "\x00") != strings.Join(peer.Addresses, "\x00")
-			m.discovered[peer.ID] = peer
-			m.discoveredAt[peer.ID] = now
-			m.discoveryMu.Unlock()
-			if (wasUnavailable || endpointChanged) && m.isTrusted(peer.ID) {
-				for _, address := range peer.Addresses {
-					m.scheduleCatalogSync(peer.ID, address, peer.Port)
+			if m.recordDiscoveredPeer(peer, time.Now()) && m.isTrusted(peer.ID) {
+				for _, discovered := range m.DiscoveredPeers() {
+					if discovered.ID != peer.ID {
+						continue
+					}
+					for _, address := range discovered.Addresses {
+						m.scheduleCatalogSync(peer.ID, address, discovered.Port)
+					}
+					break
 				}
 			}
 		})
@@ -974,6 +1039,53 @@ func (m *Manager) runDiscovery(ctx context.Context) {
 		case <-time.After(time.Second):
 		}
 	}
+}
+
+func (m *Manager) recordDiscoveredPeer(peer Peer, now time.Time) bool {
+	m.discoveryMu.Lock()
+	defer m.discoveryMu.Unlock()
+	if m.discoveredAddressAt == nil {
+		m.discoveredAddressAt = make(map[string]map[string]time.Time)
+	}
+	previous, existed := m.discovered[peer.ID]
+	reset := !existed || m.discoveredAddressAt[peer.ID] == nil || previous.Port != peer.Port || now.Sub(m.discoveredAt[peer.ID]) > discoveredPeerTTL
+	if reset {
+		previous = peer
+		previous.Addresses = nil
+		m.discoveredAddressAt[peer.ID] = make(map[string]time.Time)
+	} else {
+		active := make([]string, 0, len(previous.Addresses))
+		for _, address := range previous.Addresses {
+			if now.Sub(m.discoveredAddressAt[peer.ID][address]) <= discoveredPeerTTL {
+				active = append(active, address)
+			} else {
+				delete(m.discoveredAddressAt[peer.ID], address)
+			}
+		}
+		previous.Addresses = active
+	}
+	changed := reset
+	if peer.Name != "" {
+		previous.Name = peer.Name
+	}
+	previous.Port = peer.Port
+	previous.Version = peer.Version
+	for _, address := range peer.Addresses {
+		if !isPrivateLANAddress(net.ParseIP(address)) {
+			continue
+		}
+		if _, known := m.discoveredAddressAt[peer.ID][address]; !known {
+			previous.Addresses = append(previous.Addresses, address)
+			changed = true
+		}
+		m.discoveredAddressAt[peer.ID][address] = now
+	}
+	if len(previous.Addresses) == 0 {
+		return false
+	}
+	m.discovered[peer.ID] = previous
+	m.discoveredAt[peer.ID] = now
+	return changed
 }
 
 func (m *Manager) runCatalogSyncRefresh(ctx context.Context) {
@@ -1024,12 +1136,13 @@ func (m *Manager) scheduleCatalogSync(peerID, address string, port int) {
 		m.syncMu.Unlock()
 		return
 	}
+	endpoint := catalogSyncEndpoint{address: parsed.String(), port: port}
 	if running, ok := m.syncJobs[peerID]; ok {
-		running.address, running.port, running.dirty = parsed.String(), port, true
+		running.enqueue(endpoint)
 		m.syncMu.Unlock()
 		return
 	}
-	job := &catalogSyncJob{address: parsed.String(), port: port}
+	job := &catalogSyncJob{current: endpoint}
 	m.syncJobs[peerID] = job
 	m.syncWG.Add(1)
 	m.syncMu.Unlock()
@@ -1037,16 +1150,15 @@ func (m *Manager) scheduleCatalogSync(peerID, address string, port int) {
 		defer m.syncWG.Done()
 		for {
 			m.syncMu.Lock()
-			address, port := job.address, job.port
-			job.dirty = false
+			endpoint := job.current
 			ctx, cancel := context.WithTimeout(m.syncContext, 2*time.Minute)
 			job.cancel = cancel
 			m.syncMu.Unlock()
-			_ = m.syncPeerCatalogs(ctx, peerID, address, port)
+			err := m.syncPeerCatalogs(ctx, peerID, endpoint.address, endpoint.port)
 			cancel()
 			m.syncMu.Lock()
 			job.cancel = nil
-			if job.dirty && !m.syncClosed {
+			if !m.syncClosed && job.nextAfter(err) {
 				m.syncMu.Unlock()
 				continue
 			}

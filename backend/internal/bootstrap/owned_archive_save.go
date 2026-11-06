@@ -4,7 +4,10 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
+	"hash"
 	"io"
 	"strings"
 )
@@ -15,6 +18,7 @@ type OwnedArchiveEntry struct {
 	Name       string `json:"name"`
 	ResourceID string `json:"resourceId,omitempty"`
 	Data       []byte `json:"data,omitempty"`
+	SHA256     string `json:"sha256,omitempty"`
 }
 
 func (r *Runtime) WriteOwnedArchiveTo(ctx context.Context, entries []OwnedArchiveEntry, dest string) error {
@@ -44,6 +48,9 @@ func (r *Runtime) WriteOwnedArchiveTo(ctx context.Context, entries []OwnedArchiv
 		if entry.ResourceID == "" && len(entry.Data) == 0 {
 			return errors.New("导出文件没有内容")
 		}
+		if entry.SHA256 != "" && !validArchiveSHA256(entry.SHA256) {
+			return errors.New("导出文件校验值无效")
+		}
 		inlineBytes += len(entry.Data)
 		if inlineBytes > maxOwnedArtifactBytes {
 			return errors.New("本地附加文件过大，请先保存素材后再导出")
@@ -61,6 +68,12 @@ func (r *Runtime) WriteOwnedArchiveTo(ctx context.Context, entries []OwnedArchiv
 				return err
 			}
 			var body io.Reader = bytes.NewReader(entry.Data)
+			var digest hash.Hash
+			var output io.Writer = target
+			if entry.SHA256 != "" {
+				digest = sha256.New()
+				output = io.MultiWriter(target, digest)
+			}
 			if entry.ResourceID != "" {
 				id, err := sanitizeOwnedResourceID(entry.ResourceID)
 				if err != nil {
@@ -81,7 +94,7 @@ func (r *Runtime) WriteOwnedArchiveTo(ctx context.Context, entries []OwnedArchiv
 					source.Close()
 					return err
 				}
-				written, copyErr := io.Copy(target, io.LimitReader(source, (1<<30)+1))
+				written, copyErr := io.Copy(output, io.LimitReader(source, (1<<30)+1))
 				source.Close()
 				if copyErr != nil {
 					return copyErr
@@ -93,9 +106,12 @@ func (r *Runtime) WriteOwnedArchiveTo(ctx context.Context, entries []OwnedArchiv
 				if written > 1<<30 || total > 2<<30 {
 					return errors.New("导出文件超过大小限制")
 				}
+				if digest != nil && fmt.Sprintf("%x", digest.Sum(nil)) != entry.SHA256 {
+					return errOwnedArchiveHashMismatch
+				}
 				continue
 			}
-			written, err := io.Copy(target, body)
+			written, err := io.Copy(output, body)
 			if err != nil {
 				return err
 			}
@@ -103,12 +119,29 @@ func (r *Runtime) WriteOwnedArchiveTo(ctx context.Context, entries []OwnedArchiv
 			if total > 2<<30 {
 				return errors.New("导出文件超过大小限制")
 			}
+			if digest != nil && fmt.Sprintf("%x", digest.Sum(nil)) != entry.SHA256 {
+				return errOwnedArchiveHashMismatch
+			}
 		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		return archive.Close()
 	})
+}
+
+var errOwnedArchiveHashMismatch = errors.New("导出文件校验失败")
+
+func validArchiveSHA256(value string) bool {
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	for _, char := range value {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func safeOwnedArchiveName(name string) bool {

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Link } from "react-router";
-import { Check, ChevronDown, ChevronUp, Clapperboard, CloudUpload, Columns2, CopyPlus, Focus, FolderKanban, Gauge, History, Home, LayoutGrid, MoreHorizontal, Pencil, Plus, Redo2, Save, Search, Sparkles, Trash2, Undo2, Upload, Workflow, X } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Clapperboard, CloudUpload, Columns2, CopyPlus, Download, Focus, FolderKanban, Gauge, History, Home, LayoutGrid, MoreHorizontal, Pencil, Plus, Redo2, Save, Search, Sparkles, Trash2, Undo2, Upload, Workflow, X } from "lucide-react";
 import { Button, Dropdown, Tooltip } from "antd";
 
 import { BrandLogoFrame } from "@/components/brand/brand-logo";
@@ -39,6 +39,7 @@ type CanvasTopBarProps = {
     onDuplicateCanvas?: (id: string) => void | Promise<void>;
     onDeleteCanvas?: (id: string) => void | Promise<void>;
     onDeleteProject: () => void;
+    onExportAssets: () => void;
     onSave: () => void | Promise<void>;
     onForceSave: () => void;
     onImportImage: () => void;
@@ -87,6 +88,7 @@ export function CanvasTopBar({
     onDuplicateCanvas,
     onDeleteCanvas,
     onDeleteProject,
+    onExportAssets,
     onSave,
     onForceSave,
     onImportImage,
@@ -182,6 +184,7 @@ export function CanvasTopBar({
                                     { key: "projects", label: <Link to="/canvas">全部项目</Link> },
                                     { type: "divider" },
                                     { key: "new", label: <Link to="/canvas?mode=new">创建新项目</Link> },
+                                    { key: "export-assets", icon: <Download className="size-4" />, label: "导出画布素材", onClick: onExportAssets },
                                     { key: "delete", danger: true, label: "删除当前画布", onClick: onDeleteProject },
                                 ],
                             }}

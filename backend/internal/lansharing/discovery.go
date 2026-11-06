@@ -32,20 +32,38 @@ type PrivateEndpoint struct {
 }
 
 func FindPrivateEndpoint() (PrivateEndpoint, error) {
-	interfaces, err := net.Interfaces()
+	endpoints, err := FindPrivateEndpoints()
 	if err != nil {
 		return PrivateEndpoint{}, err
 	}
-	return selectPrivateEndpoint(interfaces, func(iface net.Interface) ([]net.Addr, error) {
+	return endpoints[0], nil
+}
+
+func FindPrivateEndpoints() ([]PrivateEndpoint, error) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return nil, err
+	}
+	return selectPrivateEndpoints(interfaces, func(iface net.Interface) ([]net.Addr, error) {
 		return iface.Addrs()
 	})
 }
 
 func selectPrivateEndpoint(interfaces []net.Interface, addressesFor func(net.Interface) ([]net.Addr, error)) (PrivateEndpoint, error) {
-	if addressesFor == nil {
-		return PrivateEndpoint{}, errors.New("LAN interface address lookup is required")
+	endpoints, err := selectPrivateEndpoints(interfaces, addressesFor)
+	if err != nil {
+		return PrivateEndpoint{}, err
 	}
-	var fallback *PrivateEndpoint
+	return endpoints[0], nil
+}
+
+func selectPrivateEndpoints(interfaces []net.Interface, addressesFor func(net.Interface) ([]net.Addr, error)) ([]PrivateEndpoint, error) {
+	if addressesFor == nil {
+		return nil, errors.New("LAN interface address lookup is required")
+	}
+	var multicast, manual []PrivateEndpoint
+	seenMulticast := make(map[string]bool)
+	seenManual := make(map[string]bool)
 	for _, iface := range interfaces {
 		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
 			continue
@@ -61,17 +79,30 @@ func selectPrivateEndpoint(interfaces []net.Interface, addressesFor func(net.Int
 			}
 			candidate := PrivateEndpoint{Interface: iface, Address: ip}
 			if iface.Flags&net.FlagMulticast != 0 {
-				return candidate, nil
-			}
-			if fallback == nil {
-				fallback = &candidate
+				if seenMulticast[ip.String()] {
+					continue
+				}
+				seenMulticast[ip.String()] = true
+				multicast = append(multicast, candidate)
+			} else {
+				if seenManual[ip.String()] {
+					continue
+				}
+				seenManual[ip.String()] = true
+				manual = append(manual, candidate)
 			}
 		}
 	}
-	if fallback != nil {
-		return *fallback, nil
+	endpoints := multicast
+	for _, endpoint := range manual {
+		if !seenMulticast[endpoint.Address.String()] {
+			endpoints = append(endpoints, endpoint)
+		}
 	}
-	return PrivateEndpoint{}, errors.New("no active private LAN interface is available for sharing")
+	if len(endpoints) > 0 {
+		return endpoints, nil
+	}
+	return nil, errors.New("no active private LAN interface is available for sharing")
 }
 
 func isPrivateLANAddress(ip net.IP) bool {
@@ -86,7 +117,7 @@ func Advertise(identity *Identity, endpoint PrivateEndpoint, port int, nickname 
 	if err != nil || strings.TrimSpace(host) == "" {
 		host = "beeftv"
 	}
-	instance := fmt.Sprintf("BeefTV-%s", identity.ID()[:12])
+	instance := fmt.Sprintf("BeefTV-%s-%s", identity.ID()[:12], hex.EncodeToString(endpoint.Address.To4()))
 	return zeroconf.RegisterProxy(instance, serviceType, domain, port, host+".local.", []string{endpoint.Address.String()}, []string{
 		"id=" + identity.ID(),
 		"version=" + protocol,

@@ -32,7 +32,9 @@ import { flushCanvasStorePersistence, useCanvasStore } from "@/stores/canvas/use
 import { ensureCanvasNodeAsset } from "@/services/project-asset-sync";
 import { useCanvasThemeStore, useCanvasThemeScope } from "@/stores/canvas/use-canvas-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
-import { App, Button } from "antd";
+import { App, Button, Checkbox } from "antd";
+import { exportCanvasAssetFiles } from "@/lib/canvas/canvas-assets-export";
+import { isWailsNativeShell } from "@/services/desktop-media-save";
 import { ArrowLeftRight, MousePointer2, Users, Wifi, WifiOff } from "lucide-react";
 import { AppModal } from "@/components/ui/product/app-modal";
 import { CanvasDeleteConfirmation } from "@/components/canvas/canvas-delete-confirmation";
@@ -291,6 +293,14 @@ function InfiniteCanvasPage() {
     const [searchParams, setSearchParams] = useSearchParams();
     const projectId = params.id || "";
     const readOnly = searchParams.get("readonly") === "1" || searchParams.get("mode") === "readonly";
+    const [assetExportOpen, setAssetExportOpen] = useState(false);
+    const [includeResultVideos, setIncludeResultVideos] = useState(false);
+    const [assetExporting, setAssetExporting] = useState(false);
+    const assetExportController = useRef<AbortController | null>(null);
+    useEffect(() => {
+        setAssetExportOpen(false);
+        return () => assetExportController.current?.abort();
+    }, [projectId]);
     const canvasStorageScope = getActiveUserScope();
     const canvasCapturedScope = captureUserScope();
     const containerRef = useRef<HTMLDivElement>(null);
@@ -2308,6 +2318,31 @@ function InfiniteCanvasPage() {
                 onAddScript={() => createNode(CanvasNodeType.Script)}
             />
         ) : null;
+    const closeAssetExport = () => {
+        if (assetExportController.current) {
+            assetExportController.current.abort();
+            return;
+        }
+        setAssetExportOpen(false);
+    };
+    const exportCurrentCanvasAssets = async () => {
+        if (!currentProject || assetExportController.current) return;
+        const controller = new AbortController();
+        assetExportController.current = controller;
+        setAssetExporting(true);
+        try {
+            const snapshot = { ...currentProject, nodes: nodesRef.current, connections: connectionsRef.current };
+            const result = await exportCanvasAssetFiles(snapshot, { includeResultVideos, signal: controller.signal });
+            if (result === "saved" && isWailsNativeShell()) message.success("画布素材已保存到所选位置");
+            setAssetExportOpen(false);
+        } catch (error) {
+            if (controller.signal.aborted) message.info("已取消画布素材导出");
+            else message.error(error instanceof Error ? error.message : "导出画布素材失败");
+        } finally {
+            assetExportController.current = null;
+            setAssetExporting(false);
+        }
+    };
     if (!projectLoaded && loadError)
         return (
             <main className="flex h-full flex-col items-center justify-center gap-4">
@@ -2320,6 +2355,23 @@ function InfiniteCanvasPage() {
 
     return (
         <>
+            <AppModal
+                title="导出画布素材"
+                open={assetExportOpen}
+                width={420}
+                onCancel={closeAssetExport}
+                maskClosable={!assetExporting}
+                keyboard={!assetExporting}
+                closable={!assetExporting}
+                footer={
+                    <>
+                        {!assetExporting ? <Button onClick={closeAssetExport}>取消</Button> : null}
+                        <Button type="primary" loading={assetExporting} onClick={() => void exportCurrentCanvasAssets()}>导出</Button>
+                    </>
+                }
+            >
+                <Checkbox checked={includeResultVideos} disabled={assetExporting} onChange={(event) => setIncludeResultVideos(event.target.checked)}>包含结果视频</Checkbox>
+            </AppModal>
             {projectMenu.deletingCanvas ? <CanvasDeleteConfirmation scope={projectMenu.deletingCanvas.scope} title="删除画布？"
                 description={`将删除「${projectMenu.deletingCanvasTitle}」，里面的节点和连线也会一起移除。`}
                 onCancel={projectMenu.cancelDeleteCanvas} onConfirm={projectMenu.confirmDeleteCanvas} /> : null}
@@ -2387,6 +2439,7 @@ function InfiniteCanvasPage() {
                                 onDuplicateCanvas={projectMenu.duplicateCanvas}
                                 onDeleteCanvas={projectMenu.requestDeleteCanvas}
                                 onDeleteProject={() => projectMenu.requestDeleteCanvas(projectId)}
+                                onExportAssets={() => { setIncludeResultVideos(false); setAssetExportOpen(true); }}
                                 onSave={() => void saveCanvasProject()}
                                 onForceSave={confirmForceSaveCanvas}
                                 localOnly={localOnly}

@@ -1,7 +1,31 @@
 import { expect, test } from "bun:test";
 
 import { resourceFileUrl } from "@/services/api/resources";
-import { createSharedCanvasLocalAssetResolver, summarizeSharedCanvasAssetReadiness, validatedSharedCanvasLocalBindings } from "@/services/lan-collaboration-assets";
+import { createSharedCanvasLocalAssetResolver, sharedCanvasPeerLocations, summarizeSharedCanvasAssetReadiness, validatedSharedCanvasLocalBindings } from "@/services/lan-collaboration-assets";
+
+test("shared asset pulls try every discovered address of trusted peers", () => {
+    expect(sharedCanvasPeerLocations(
+        [
+            { peerId: "peer-a", address: "192.168.1.20", port: 8080 },
+            { peerId: "peer-b", address: "10.0.0.8", port: 8080 },
+            { peerId: "peer-c" },
+        ],
+        [
+            { peerId: "peer-a", address: "10.0.0.20", port: 8080 },
+            { peerId: "peer-a", address: "192.168.1.20", port: 8080 },
+            { peerId: "peer-a", address: "10.0.0.20", port: 8080 },
+            { peerId: "peer-b", address: "172.16.0.8", port: 8080 },
+            { peerId: "peer-c", address: "192.168.2.8", port: 8080 },
+            { peerId: "untrusted", address: "192.168.2.9", port: 8080 },
+        ],
+    )).toEqual([
+        { peerId: "peer-a", address: "192.168.1.20", port: 8080 },
+        { peerId: "peer-a", address: "10.0.0.20", port: 8080 },
+        { peerId: "peer-b", address: "172.16.0.8", port: 8080 },
+        { peerId: "peer-b", address: "10.0.0.8", port: 8080 },
+        { peerId: "peer-c", address: "192.168.2.8", port: 8080 },
+    ]);
+});
 
 test("deleted local resource bindings are not treated as ready", async () => {
     const probes: string[] = [];
