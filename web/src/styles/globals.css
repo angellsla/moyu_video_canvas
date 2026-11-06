@@ -1948,6 +1948,23 @@
         max-width: min(360px, calc(50vw - 88px));
     }
 
+    .canvas-collaboration-status {
+        scrollbar-width: none;
+    }
+
+    .canvas-collaboration-status::-webkit-scrollbar {
+        display: none;
+    }
+
+    @container (max-width: 650px) {
+        .canvas-topbar-collaboration-status {
+            position: absolute;
+            top: calc(var(--canvas-topbar-h) + 8px);
+            left: 12px;
+            max-width: calc(100% - 24px);
+        }
+    }
+
     .canvas-topbar-brand-mark { display: grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; overflow: hidden; border-radius: 6px; background: #f4f4f4; }
     .canvas-topbar-brand-mark[data-logo-frame-enabled="false"] { background: #f4f4f4 !important; border-radius: 6px !important; }
     .canvas-topbar-brand-mark-image { width: 18px; height: 18px; object-fit: contain; filter: invert(1); }

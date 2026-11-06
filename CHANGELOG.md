@@ -4,6 +4,11 @@ All notable public changes to the desktop workspace are documented in this file.
 
 ## Unreleased
 
+## v1.0.7
+
+- 协作画布的连接、成员和素材同步状态移到画布左上方，紧邻项目与画布导航，便于编辑时随时查看。
+- 窄窗口下状态栏移至导航下方并可横向滚动；专注模式继续显示协作状态与远端光标、选区。
+
 ## v1.0.6
 
 - 桌面端启动后定时检查共享清单中本机资产文件的存在状态；清单显示最近确认时间，区分存在、缺失和暂时无法确认。

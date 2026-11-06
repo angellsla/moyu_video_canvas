@@ -15,6 +15,7 @@ type CanvasTopBarProps = {
     workspaceView: "workflow" | "storyboard";
     onWorkspaceViewChange: (view: "workflow" | "storyboard") => void;
     syncStatus?: ReactNode;
+    collaborationStatus?: ReactNode;
     versionsOpen: boolean;
     onToggleVersions: () => void;
     onOpenWorkflows?: () => void;
@@ -64,6 +65,7 @@ export function CanvasTopBar({
     workspaceView,
     onWorkspaceViewChange,
     syncStatus,
+    collaborationStatus,
     versionsOpen,
     onToggleVersions,
     onOpenWorkflows,
@@ -171,7 +173,7 @@ export function CanvasTopBar({
     return (
         <>
             <div className="canvas-topbar pointer-events-none absolute inset-x-0 top-0 z-[var(--z-toolbar)] flex h-[var(--canvas-topbar-h)] items-center justify-between px-2 sm:px-2">
-                <div className="pointer-events-none flex items-center gap-2">
+                <div className="pointer-events-none flex min-w-0 flex-1 items-center gap-2">
                 <div className="canvas-topbar-cluster canvas-topbar-project-cluster pointer-events-auto flex min-w-0 items-center gap-2" style={dockStyle}>
                     <Dropdown
                             trigger={["click"]}
@@ -334,6 +336,7 @@ export function CanvasTopBar({
                     </Dropdown>
                     <span className="canvas-topbar-sync-status">{syncStatus}</span>
                 </div>
+                {collaborationStatus ? <div className="canvas-topbar-collaboration-status pointer-events-none w-fit min-w-0 max-w-[min(28rem,42vw)]">{collaborationStatus}</div> : null}
                 </div>
 
                 {readOnly ? (

@@ -5,7 +5,7 @@ import { useCanvasAssistantContinuation } from "./use-canvas-assistant-continuat
 import { highlightAssistantNodes } from "./canvas-assistant-highlight";
 import { resolveCanvasRightPanel, useCanvasAssistant, useCanvasAssistantDockable } from "./use-canvas-assistant";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Dispatch, MouseEvent as ReactMouseEvent, SetStateAction } from "react";
+import type { Dispatch, MouseEvent as ReactMouseEvent, ReactNode, SetStateAction } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { isLocalWorkspaceMode } from "@/services/workspace-mode";
 import { queryGenerationTask, type GenerationTask } from "@/services/api/task-center";
@@ -173,23 +173,15 @@ function collaborationColor(peerId: string) {
 }
 
 function CanvasCollaborationLayer({
-    members,
     presence,
     nodes,
     viewport,
-    connected,
-    syncError,
-    missingAssets,
-    assetReadiness,
+    status,
 }: {
-    members: LanCanvasPresence[];
     presence: LanCanvasPresence[];
     nodes: CanvasNodeData[];
     viewport: ViewportTransform;
-    connected: boolean;
-    syncError: string;
-    missingAssets: string[];
-    assetReadiness: SharedCanvasAssetReadiness | null;
+    status?: ReactNode;
 }) {
     const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
     return (
@@ -236,31 +228,49 @@ function CanvasCollaborationLayer({
                     );
                 })}
             </div>
-            <div className="pointer-events-none absolute right-3 top-3 z-[var(--z-node-toolbar)] flex max-w-[min(28rem,calc(100%-1.5rem))] flex-wrap items-center justify-end gap-x-3 gap-y-1 rounded-sm border border-border bg-surface/95 px-2.5 py-1.5 text-xs text-foreground shadow-sm" role="status" aria-live="polite" title={syncError || undefined}>
-                <span className="inline-flex items-center gap-1.5">
-                    {connected ? <Wifi className="size-3.5 text-emerald-600" /> : <WifiOff className="size-3.5 text-foreground/55" />}
-                    {connected ? "协作已连接" : "正在连接协作"}
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                    <Users className="size-3.5" />
-                    {members.length ? members.map((member) => (
-                        <span key={member.peerId} className="inline-flex items-center gap-1">
-                            <span className={`size-1.5 rounded-full ${member.collaborating ? "bg-emerald-500" : member.online ? "bg-amber-500" : "bg-foreground/35"}`} />
-                            {member.nickname}
-                            <span className="text-foreground/55">{member.collaborating ? "协作中" : member.online ? "局域网在线" : "离线"}</span>
-                        </span>
-                    )) : "等待成员"}
-                </span>
-                {missingAssets.length ? <span className="text-amber-700">{missingAssets.length} 项素材待同步</span> : null}
-                {assetReadiness?.requiredCount ? (
-                    <span title="对端数值来自共享清单声明，尚未经该设备确认">
-                        本机素材 {assetReadiness.local.mappedCount}/{assetReadiness.requiredCount}
-                        {assetReadiness.peers.map((peer) => ` · ${peer.nickname}: ${peer.claimedCount} 项声明${peer.discovered ? "" : "（离线）"}`)}
-                    </span>
-                ) : null}
-                {syncError ? <span className="text-red-600">同步异常</span> : null}
-            </div>
+            {status ? <div className="absolute left-3 top-3 z-[var(--z-node-toolbar)] max-w-[calc(100%-1.5rem)]">{status}</div> : null}
         </>
+    );
+}
+
+function CanvasCollaborationStatus({
+    members,
+    connected,
+    syncError,
+    missingAssets,
+    assetReadiness,
+}: {
+    members: LanCanvasPresence[];
+    connected: boolean;
+    syncError: string;
+    missingAssets: string[];
+    assetReadiness: SharedCanvasAssetReadiness | null;
+}) {
+    return (
+        <div data-canvas-no-zoom className="canvas-collaboration-status pointer-events-auto flex min-w-0 max-w-full items-center gap-3 overflow-x-auto whitespace-nowrap rounded-sm border border-border bg-surface/95 px-2.5 py-1.5 text-xs text-foreground shadow-sm" role="status" aria-live="polite" title={syncError || undefined}>
+            <span className="inline-flex items-center gap-1.5">
+                {connected ? <Wifi className="size-3.5 text-emerald-600" /> : <WifiOff className="size-3.5 text-foreground/55" />}
+                {connected ? "协作已连接" : "正在连接协作"}
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+                <Users className="size-3.5" />
+                {members.length ? members.map((member) => (
+                    <span key={member.peerId} className="inline-flex items-center gap-1">
+                        <span className={`size-1.5 rounded-full ${member.collaborating ? "bg-emerald-500" : member.online ? "bg-amber-500" : "bg-foreground/35"}`} />
+                        {member.nickname}
+                        <span className="text-foreground/55">{member.collaborating ? "协作中" : member.online ? "局域网在线" : "离线"}</span>
+                    </span>
+                )) : "等待成员"}
+            </span>
+            {missingAssets.length ? <span className="text-amber-700">{missingAssets.length} 项素材待同步</span> : null}
+            {assetReadiness?.requiredCount ? (
+                <span title="对端数值来自共享清单声明，尚未经该设备确认">
+                    本机素材 {assetReadiness.local.mappedCount}/{assetReadiness.requiredCount}
+                    {assetReadiness.peers.map((peer) => ` · ${peer.nickname}: ${peer.claimedCount} 项声明${peer.discovered ? "" : "（离线）"}`)}
+                </span>
+            ) : null}
+            {syncError ? <span className="text-red-600">同步异常</span> : null}
+        </div>
     );
 }
 
@@ -2353,6 +2363,16 @@ function InfiniteCanvasPage() {
         );
     if (!projectLoaded) return <CanvasRefreshShell />;
 
+    const collaborationStatus = currentProject?.sharedCanvasId ? (
+        <CanvasCollaborationStatus
+            members={collaboration.members}
+            connected={collaboration.connected}
+            syncError={collaboration.syncError}
+            missingAssets={collaboration.missingAssets}
+            assetReadiness={collaboration.assetReadiness}
+        />
+    ) : null;
+
     return (
         <>
             <AppModal
@@ -2411,6 +2431,7 @@ function InfiniteCanvasPage() {
                                     }
                                 }}
                                 syncStatus={<CanvasSyncStatus projectId={projectId} onLoadLatest={reloadLatestCanvasProject} onOpenVersions={openVersions} />}
+                                collaborationStatus={collaborationStatus}
                                 readOnly={readOnly}
                                 onDuplicateProject={projectMenu.duplicateCurrentProject}
                                 versionsOpen={versions.open}
@@ -2482,14 +2503,10 @@ function InfiniteCanvasPage() {
                                     wheelBehavior={wheelBehavior}
                                     collaborationLayer={currentProject?.sharedCanvasId ? (
                                         <CanvasCollaborationLayer
-                                            members={collaboration.members}
                                             presence={collaboration.presence}
                                             nodes={nodes}
                                             viewport={viewport}
-                                            connected={collaboration.connected}
-                                            syncError={collaboration.syncError}
-                                            missingAssets={collaboration.missingAssets}
-                                            assetReadiness={collaboration.assetReadiness}
+                                            status={focusMode ? collaborationStatus : undefined}
                                         />
                                     ) : null}
                                     graphicsLayer={
