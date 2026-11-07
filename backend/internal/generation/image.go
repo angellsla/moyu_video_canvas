@@ -12,6 +12,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -32,6 +33,10 @@ func usesSeedreamRequestBody(input Input) bool {
 func RunImageTask(ctx context.Context, input Input) (map[string]interface{}, error) {
 	if usesSeedreamRequestBody(input) {
 		return runSeedreamImageTask(ctx, input)
+	}
+	// mj_imagine keeps the existing Images endpoint; only its JSON body differs.
+	if input.Config.InterfaceType == string(model.ChannelInterfaceOpenAIImage) && strings.EqualFold(strings.TrimSpace(input.Config.Model), "mj_imagine") {
+		return runMidjourneyImagineImageTask(ctx, input)
 	}
 	outputCount := 1
 	if input.ImageCapability != nil && input.ImageCapability.FixedOutputs > 0 {
@@ -133,6 +138,117 @@ func RunImageTask(ctx context.Context, input Input) (map[string]interface{}, err
 		result["usage"] = payload.Usage
 	}
 	return result, nil
+}
+
+var midjourneyAspectParameter = regexp.MustCompile(`(?i)(?:^|\s)--(?:ar|aspect)(?:\s|=|$)`)
+
+func runMidjourneyImagineImageTask(ctx context.Context, input Input) (map[string]interface{}, error) {
+	prepared, err := prepareMidjourneyImagineInput(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	body := map[string]interface{}{
+		"model":  prepared.Config.Model,
+		"prompt": prepared.Prompt,
+	}
+	if len(prepared.ReferenceImages) > 0 {
+		images := make([]string, 0, len(prepared.ReferenceImages))
+		for _, image := range prepared.ReferenceImages {
+			images = append(images, image.DataURL)
+		}
+		body["base64Array"] = images
+	}
+	var payload ImageResponse
+	if err := PostJSON(ctx, prepared.Config, "/images/generations", body, &payload); err != nil {
+		return nil, err
+	}
+	images, err := ImageDataURLs(payload)
+	if err != nil {
+		return nil, err
+	}
+	result := map[string]interface{}{"mode": "image", "images": images}
+	if payload.Usage != nil {
+		result["usage"] = payload.Usage
+	}
+	return result, nil
+}
+
+func prepareMidjourneyImagineInput(ctx context.Context, input Input) (Input, error) {
+	if !strings.EqualFold(strings.TrimSpace(input.Config.Model), "mj_imagine") {
+		return Input{}, errors.New("Midjourney Imagine 协议仅支持 mj_imagine")
+	}
+	if input.Mask != nil || len(input.ReferenceVideos) > 0 || len(input.ReferenceAudios) > 0 {
+		return Input{}, errors.New("Midjourney Imagine 只支持提示词和参考图片，不支持蒙版、视频或音频")
+	}
+	if count := strings.TrimSpace(input.Config.Count); count != "" && count != "1" {
+		return Input{}, errors.New("Midjourney Imagine 单次只返回一张四宫格图片")
+	}
+	if quality := strings.ToLower(strings.TrimSpace(input.Config.Quality)); quality != "" && quality != "auto" && quality != "any" {
+		return Input{}, errors.New("Midjourney Imagine 的质量等参数请写入提示词，不使用图片质量选项")
+	}
+	if ParseBool(input.Config.TransparentBackground, false) {
+		return Input{}, errors.New("Midjourney Imagine 不支持透明背景选项")
+	}
+	prompt := strings.TrimSpace(WithSystemPrompt(input.Config, input.Prompt))
+	if prompt == "" {
+		return Input{}, errors.New("Midjourney Imagine 提示词不能为空")
+	}
+	if !midjourneyAspectParameter.MatchString(prompt) {
+		ratio, err := midjourneyAspectRatio(input.Config.Size)
+		if err != nil {
+			return Input{}, err
+		}
+		if ratio != "" {
+			prompt += " --ar " + ratio
+		}
+	}
+	input.Prompt = prompt
+	input.Config.SystemPrompt = ""
+	for index := range input.ReferenceImages {
+		image := &input.ReferenceImages[index]
+		reference := ProtocolMediaReference(*image, "image", index)
+		data, _, err := ProtocolMediaBytes(ctx, input.Config, reference)
+		if err != nil {
+			return Input{}, fmt.Errorf("读取 Midjourney 参考图 %d 失败：%w", index+1, err)
+		}
+		if len(data) == 0 || len(data) > 10*1024*1024 {
+			return Input{}, fmt.Errorf("Midjourney 参考图 %d 必须为非空且不超过 10 MiB", index+1)
+		}
+		mimeType := strings.ToLower(strings.TrimSpace(strings.Split(http.DetectContentType(data), ";")[0]))
+		if !strings.HasPrefix(mimeType, "image/") {
+			return Input{}, fmt.Errorf("Midjourney 参考图 %d 不是有效图片", index+1)
+		}
+		image.DataURL = DataURL(mimeType, data)
+		image.URL = ""
+		image.MimeType = mimeType
+		image.Bytes = int64(len(data))
+	}
+	return input, nil
+}
+
+func midjourneyAspectRatio(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(strings.ReplaceAll(value, "×", "x")))
+	if value == "" || value == "auto" {
+		return "", nil
+	}
+	separator := ":"
+	if strings.Contains(value, "x") {
+		separator = "x"
+	}
+	parts := strings.Split(value, separator)
+	if len(parts) != 2 {
+		return "", fmt.Errorf("Midjourney 画幅比例无效：%s", value)
+	}
+	width, widthErr := strconv.Atoi(parts[0])
+	height, heightErr := strconv.Atoi(parts[1])
+	if widthErr != nil || heightErr != nil || width <= 0 || height <= 0 {
+		return "", fmt.Errorf("Midjourney 画幅比例无效：%s", value)
+	}
+	a, b := width, height
+	for b != 0 {
+		a, b = b, a%b
+	}
+	return fmt.Sprintf("%d:%d", width/a, height/a), nil
 }
 
 func RunGeminiImageTask(ctx context.Context, input Input) (map[string]interface{}, error) {

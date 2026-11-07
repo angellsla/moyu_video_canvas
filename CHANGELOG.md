@@ -4,6 +4,11 @@ All notable public changes to the desktop workspace are documented in this file.
 
 ## Unreleased
 
+## v1.0.9
+
+- `mj_imagine` 保持现有图片生成 API 端点，仅调整请求体：保留模型 ID 与提示词，参考图片以 `base64Array` 传递，画幅比例写入提示词的 `--ar` 参数。
+- 不再向该模型发送 OpenAI 图片生成的尺寸、数量、质量等无关字段；手写的 Midjourney 提示词参数保持原样。
+
 ## v1.0.8
 
 - 修复局域网设备在先后启动或部分链路不传递 mDNS 时可能无法互相发现的问题：周期性重新查询，并在各已监听网卡所在子网发送定向广播发现信息。
