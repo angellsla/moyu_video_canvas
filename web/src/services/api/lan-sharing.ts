@@ -79,11 +79,11 @@ export function getLanSharingPeers() {
 }
 
 export function pairLanSharingPeer(input: {
-    peerId: string;
     address: string;
-    port: number;
     pairingCode: string;
-    nickname: string;
+    peerId?: string;
+    port?: number;
+    nickname?: string;
 }) {
     return http.post<{ peer: LanSharingTrustedPeer }>(`${BASE_PATH}/pair`, input);
 }

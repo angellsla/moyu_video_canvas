@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -49,6 +50,7 @@ var (
 	ErrNotFound         = errors.New("LAN sharing record was not found")
 	ErrConflict         = errors.New("LAN sharing request conflicts with current state")
 	ErrPairingCode      = errors.New("pairing code is invalid or expired")
+	ErrPeerUnreachable  = errors.New("LAN peer pairing endpoint is unreachable")
 	ErrPeerNotTrusted   = errors.New("LAN peer is not trusted")
 	ErrManagerClosed    = errors.New("LAN sharing manager is closed")
 	ErrCatalogUpdateBig = errors.New("catalog update exceeds size limit")
@@ -158,9 +160,11 @@ type Manager struct {
 	endpoint        string
 	closed          bool
 
-	pairMu       sync.Mutex
-	pairingCode  string
-	pairingUntil time.Time
+	pairMu               sync.Mutex
+	pairingCode          string
+	pairingUntil         time.Time
+	consumedPairingCode  string
+	consumedPairingUntil time.Time
 
 	discoveryMu         sync.RWMutex
 	discovered          map[string]Peer
@@ -364,6 +368,7 @@ func (m *Manager) Start(ctx context.Context) (Status, error) {
 	discoveryCtx, cancel := context.WithCancel(context.Background())
 	m.discoveryCancel = cancel
 	go m.runDiscovery(discoveryCtx)
+	go m.runBroadcastDiscovery(discoveryCtx, endpoints, port)
 	go m.runCatalogSyncRefresh(discoveryCtx)
 	go m.runCollaborationPresenceHeartbeat(discoveryCtx)
 	m.mu.Unlock()
@@ -488,13 +493,28 @@ func (m *Manager) PairPeer(ctx context.Context, request PairRequest) (PeerSummar
 	address := net.ParseIP(strings.TrimSpace(request.Address))
 	code := strings.TrimSpace(request.PairingCode)
 	nickname := normalizeNickname(request.Nickname)
-	if !validNodeID(peerID) || peerID == m.NodeID() || address == nil || address.To4() == nil || !isPrivateLANAddress(address) || request.Port < 1 || request.Port > 65535 || code == "" {
+	if address == nil || address.To4() == nil || !isPrivateLANAddress(address) || code == "" || request.Port < 0 || request.Port > 65535 || (peerID != "" && request.Port == 0) {
 		return PeerSummary{}, ErrInvalid
 	}
 	m.mu.Lock()
 	server := m.peerServer
 	m.mu.Unlock()
 	if server == nil {
+		return PeerSummary{}, ErrInvalid
+	}
+	if peerID == "" {
+		var err error
+		if request.Port == 0 {
+			peerID, request.Port, err = queryPairEndpoint(ctx, address, broadcastDiscoveryPort, code)
+		} else {
+			peerID, err = queryPairEndpointTLS(ctx, m.identity, address, request.Port, code)
+		}
+		if err != nil {
+			return PeerSummary{}, err
+		}
+		peerID = strings.ToLower(peerID)
+	}
+	if !validNodeID(peerID) || peerID == m.NodeID() || request.Port < 1 || request.Port > 65535 {
 		return PeerSummary{}, ErrInvalid
 	}
 	localEndpoints, _ := server.EndpointStatus()
@@ -798,6 +818,7 @@ func (m *Manager) RegisterPeerHandler(pattern string, handler http.Handler) erro
 func (m *Manager) peerHTTPHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /pair", m.handlePair)
+	mux.HandleFunc("GET /pair/probe", m.handlePairProbe)
 	mux.HandleFunc("GET /catalogs", m.handlePeerGetCatalogs)
 	mux.HandleFunc("POST /catalogs", m.handlePeerPostCatalog)
 	mux.HandleFunc("GET /catalogs/{catalogID}/updates", m.handlePeerGetUpdates)
@@ -827,6 +848,14 @@ func (m *Manager) peerHTTPHandler() http.Handler {
 			mux.ServeHTTP(w, r)
 			return
 		}
+		if r.URL.Path == "/pair/probe" {
+			if r.Method != http.MethodGet {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			mux.ServeHTTP(w, r)
+			return
+		}
 		if !m.isTrusted(peerID) {
 			http.Error(w, "peer is not trusted", http.StatusForbidden)
 			return
@@ -834,6 +863,31 @@ func (m *Manager) peerHTTPHandler() http.Handler {
 		m.markPeerSeen(peerID)
 		mux.ServeHTTP(w, r)
 	})
+}
+
+func (m *Manager) handlePairProbe(w http.ResponseWriter, r *http.Request) {
+	nonce, ok := decodePairProbeNonce(r.URL.Query().Get("nonce"))
+	if !ok {
+		http.Error(w, "invalid pairing probe", http.StatusBadRequest)
+		return
+	}
+	code := m.pairingCodeForProbe()
+	if code == "" {
+		http.Error(w, "pairing code is expired", http.StatusForbidden)
+		return
+	}
+	status := m.Status()
+	_, portText, err := net.SplitHostPort(status.Endpoint)
+	if err != nil {
+		http.Error(w, "pairing service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		http.Error(w, "pairing service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, http.StatusOK, newPairProbeReply(nonce, m.NodeID(), port, code))
 }
 
 func (m *Manager) handlePair(w http.ResponseWriter, r *http.Request) {
@@ -859,16 +913,20 @@ func (m *Manager) handlePair(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "peer endpoint is invalid", http.StatusBadRequest)
 		return
 	}
-	if err := m.consumePairingCode(strings.TrimSpace(payload.PairingCode)); err != nil {
-		http.Error(w, "pairing code is invalid or expired", http.StatusForbidden)
-		return
+	// A trusted certificate may retry pairing after a previous response was lost.
+	// Revoked or new peers still need the current one-time code.
+	if !m.isTrusted(peerID) {
+		if err := m.consumePairingCode(strings.TrimSpace(payload.PairingCode)); err != nil {
+			http.Error(w, "pairing code is invalid or expired", http.StatusForbidden)
+			return
+		}
 	}
 	trusted, err := m.saveTrustedPeer(r.Context(), peerID, ed25519.PublicKey(publicKey), payload.Nickname, payload.Address, payload.Port)
 	if err != nil {
 		http.Error(w, "could not persist peer trust", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, peerPairReply{PeerID: trusted.PeerID, Nickname: m.LocalNickname(), TrustedAt: trusted.TrustedAt})
+	writeJSON(w, http.StatusOK, peerPairReply{PeerID: m.NodeID(), Nickname: m.LocalNickname(), TrustedAt: trusted.TrustedAt})
 }
 
 func (m *Manager) handlePeerGetUpdates(w http.ResponseWriter, r *http.Request) {
@@ -1013,30 +1071,39 @@ func (m *Manager) markPeerSeen(peerID string) {
 }
 
 func (m *Manager) runDiscovery(ctx context.Context) {
-	for ctx.Err() == nil {
-		Browse(ctx, func(peer Peer) {
-			if peer.ID == m.NodeID() {
-				return
-			}
-			if m.recordDiscoveredPeer(peer, time.Now()) && m.isTrusted(peer.ID) {
-				for _, discovered := range m.DiscoveredPeers() {
-					if discovered.ID != peer.ID {
-						continue
-					}
-					for _, address := range discovered.Addresses {
-						m.scheduleCatalogSync(peer.ID, address, discovered.Port)
-					}
-					break
-				}
-			}
+	browseWithRefresh(ctx, 20*time.Second, time.Second, func(browseCtx context.Context) error {
+		return Browse(browseCtx, func(peer Peer) {
+			m.acceptDiscoveredPeer(peer)
 		})
-		if ctx.Err() != nil {
-			return
+	})
+}
+
+func (m *Manager) runBroadcastDiscovery(ctx context.Context, endpoints []PrivateEndpoint, port int) {
+	for ctx.Err() == nil {
+		if err := browseBroadcast(ctx, endpoints, m.NodeID(), m.LocalNickname, port, m.acceptDiscoveredPeer, m.pairingCodeForProbe); err != nil && ctx.Err() == nil {
+			log.Printf("LAN broadcast discovery unavailable: %v", err)
 		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(time.Second):
+		case <-time.After(broadcastInterval):
+		}
+	}
+}
+
+func (m *Manager) acceptDiscoveredPeer(peer Peer) {
+	if peer.ID == m.NodeID() {
+		return
+	}
+	if m.recordDiscoveredPeer(peer, time.Now()) && m.isTrusted(peer.ID) {
+		for _, discovered := range m.DiscoveredPeers() {
+			if discovered.ID != peer.ID {
+				continue
+			}
+			for _, address := range discovered.Addresses {
+				m.scheduleCatalogSync(peer.ID, address, discovered.Port)
+			}
+			break
 		}
 	}
 }
@@ -1338,13 +1405,29 @@ func requestPeerJSON(ctx context.Context, client *http.Client, method, endpoint 
 func (m *Manager) setPairingCode(code string, expires time.Time) {
 	m.pairMu.Lock()
 	m.pairingCode, m.pairingUntil = code, expires
+	m.consumedPairingCode, m.consumedPairingUntil = "", time.Time{}
 	m.pairMu.Unlock()
 }
 
 func (m *Manager) clearPairingCode() {
 	m.pairMu.Lock()
 	m.pairingCode, m.pairingUntil = "", time.Time{}
+	m.consumedPairingCode, m.consumedPairingUntil = "", time.Time{}
 	m.pairMu.Unlock()
+}
+
+func (m *Manager) pairingCodeForProbe() string {
+	m.pairMu.Lock()
+	defer m.pairMu.Unlock()
+	if m.pairingCode != "" && time.Now().Before(m.pairingUntil) {
+		return m.pairingCode
+	}
+	// A consumed code can still identify a peer during a lost-response retry;
+	// the TLS pairing handler accepts it only for a previously trusted peer.
+	if m.consumedPairingCode != "" && time.Now().Before(m.consumedPairingUntil) {
+		return m.consumedPairingCode
+	}
+	return ""
 }
 
 func (m *Manager) hasActivePairingCode() bool {
@@ -1359,6 +1442,7 @@ func (m *Manager) consumePairingCode(code string) error {
 	if code == "" || m.pairingCode == "" || !time.Now().Before(m.pairingUntil) || !constantTimeStringEqual(code, m.pairingCode) {
 		return ErrPairingCode
 	}
+	m.consumedPairingCode, m.consumedPairingUntil = m.pairingCode, m.pairingUntil
 	m.pairingCode, m.pairingUntil = "", time.Time{}
 	return nil
 }
@@ -1478,6 +1562,7 @@ func validatePeerHandlerPattern(existing map[string]http.Handler, pattern string
 	}()
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /pair", func(http.ResponseWriter, *http.Request) {})
+	mux.HandleFunc("GET /pair/probe", func(http.ResponseWriter, *http.Request) {})
 	mux.HandleFunc("GET /catalogs", func(http.ResponseWriter, *http.Request) {})
 	mux.HandleFunc("POST /catalogs", func(http.ResponseWriter, *http.Request) {})
 	mux.HandleFunc("GET /catalogs/{catalogID}/updates", func(http.ResponseWriter, *http.Request) {})

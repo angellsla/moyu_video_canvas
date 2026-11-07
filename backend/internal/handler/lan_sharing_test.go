@@ -13,7 +13,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type lanSharingRouteFake struct{ statusCalls int }
+type lanSharingRouteFake struct {
+	statusCalls int
+	pairRequest lansharing.PairRequest
+	pairError   error
+}
 
 func (f *lanSharingRouteFake) Status() lansharing.Status {
 	f.statusCalls++
@@ -32,8 +36,12 @@ func (*lanSharingRouteFake) DiscoveredPeers() []lansharing.Peer { return nil }
 func (*lanSharingRouteFake) TrustedPeers(context.Context) ([]lansharing.PeerSummary, error) {
 	return nil, nil
 }
-func (*lanSharingRouteFake) PairPeer(context.Context, lansharing.PairRequest) (lansharing.PeerSummary, error) {
-	return lansharing.PeerSummary{}, errors.New("unused")
+func (f *lanSharingRouteFake) PairPeer(_ context.Context, request lansharing.PairRequest) (lansharing.PeerSummary, error) {
+	f.pairRequest = request
+	if f.pairError != nil {
+		return lansharing.PeerSummary{}, f.pairError
+	}
+	return lansharing.PeerSummary{PeerID: "remote-node"}, nil
 }
 func (*lanSharingRouteFake) RevokePeer(context.Context, string) error { return nil }
 func (*lanSharingRouteFake) Catalogs(context.Context) ([]lansharing.CatalogSummary, error) {
@@ -111,5 +119,34 @@ func TestLANSharingRoutesRequireTrustedDesktop(t *testing.T) {
 	router.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"nickname":"Studio Editor"`) {
 		t.Fatalf("trusted nickname update = %d: %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/lan-sharing/pair", strings.NewReader(`{"address":"192.168.1.20","pairingCode":"ONE-TIME"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Host = "127.0.0.1:8080"
+	request.RemoteAddr = "127.0.0.1:1234"
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || fake.pairRequest.Address != "192.168.1.20" || fake.pairRequest.PairingCode != "ONE-TIME" || fake.pairRequest.PeerID != "" || fake.pairRequest.Port != 0 {
+		t.Fatalf("IP and code pairing request = %d, manager input = %#v: %s", response.Code, fake.pairRequest, response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/lan-sharing/pair", strings.NewReader(`{"address":"192.168.1.20","port":42123,"pairingCode":"ONE-TIME"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Host = "127.0.0.1:8080"
+	request.RemoteAddr = "127.0.0.1:1234"
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || fake.pairRequest.Port != 42123 || fake.pairRequest.PeerID != "" {
+		t.Fatalf("optional port pairing request = %d, manager input = %#v: %s", response.Code, fake.pairRequest, response.Body.String())
+	}
+	fake.pairError = lansharing.ErrPeerUnreachable
+	request = httptest.NewRequest(http.MethodPost, "/api/lan-sharing/pair", strings.NewReader(`{"address":"192.168.1.20","pairingCode":"ONE-TIME"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Host = "127.0.0.1:8080"
+	request.RemoteAddr = "127.0.0.1:1234"
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusGatewayTimeout {
+		t.Fatalf("unreachable peer response = %d: %s", response.Code, response.Body.String())
 	}
 }

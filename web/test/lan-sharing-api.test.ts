@@ -36,6 +36,8 @@ test("LAN sharing API functions use the local JSON request contract", async () =
         await stopLanSharing();
         await getLanSharingPeers();
         await pairLanSharingPeer({ peerId: "peer/a", address: "127.0.0.1", port: 4096, pairingCode: "123456", nickname: "Editor" });
+        await pairLanSharingPeer({ address: "192.168.1.20", pairingCode: "ONE-TIME" });
+        await pairLanSharingPeer({ address: "192.168.1.20", port: 42123, pairingCode: "ONE-TIME" });
         await revokeLanSharingPeer("peer/a");
         await getLanSharingCatalogs();
         await createLanSharingCatalog("Shared shots");
@@ -55,6 +57,8 @@ test("LAN sharing API functions use the local JSON request contract", async () =
         ["post", "/lan-sharing/stop"],
         ["get", "/lan-sharing/peers"],
         ["post", "/lan-sharing/pair"],
+        ["post", "/lan-sharing/pair"],
+        ["post", "/lan-sharing/pair"],
         ["delete", "/lan-sharing/peers/peer%2Fa"],
         ["get", "/lan-sharing/catalogs"],
         ["post", "/lan-sharing/catalogs"],
@@ -66,11 +70,13 @@ test("LAN sharing API functions use the local JSON request contract", async () =
     ]);
     expect(calls[1].data).toEqual({ nickname: "Studio Editor" });
     expect(calls[5].data).toEqual({ peerId: "peer/a", address: "127.0.0.1", port: 4096, pairingCode: "123456", nickname: "Editor" });
-    expect(calls[8].data).toEqual({ name: "Shared shots" });
-    expect(calls[10].data).toEqual({ resourceId: "resource/a" });
-    expect(calls[11].data).toEqual({ peerId: "peer-a", address: "192.168.1.2", port: 4096, contentHash: "sha256:abc", name: "shot.png", mimeType: "image/png", size: 123 });
-    expect(calls[13].data).toEqual({ updateBase64: "AH+A/w==" });
-    expect(calls[12].method).toBe("get");
+    expect(calls[6].data).toEqual({ address: "192.168.1.20", pairingCode: "ONE-TIME" });
+    expect(calls[7].data).toEqual({ address: "192.168.1.20", port: 42123, pairingCode: "ONE-TIME" });
+    expect(calls[10].data).toEqual({ name: "Shared shots" });
+    expect(calls[12].data).toEqual({ resourceId: "resource/a" });
+    expect(calls[13].data).toEqual({ peerId: "peer-a", address: "192.168.1.2", port: 4096, contentHash: "sha256:abc", name: "shot.png", mimeType: "image/png", size: 123 });
+    expect(calls[15].data).toEqual({ updateBase64: "AH+A/w==" });
+    expect(calls[14].method).toBe("get");
     expect(decodeLanSharingUpdate("AH+A/w==")).toEqual(new Uint8Array([0, 127, 128, 255]));
 });
 

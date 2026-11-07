@@ -90,18 +90,19 @@ paths:
           application/json:
             schema:
               type: object
-              required: [peerId, address, port, pairingCode, nickname]
+              required: [address, pairingCode]
               properties:
-                peerId: { type: string, pattern: "^[a-f0-9]{64}$" }
-                address: { type: string, format: ipv4, description: RFC1918 私有 IPv4 }
-                port: { type: integer, minimum: 1, maximum: 65535 }
+                peerId: { type: string, pattern: "^[a-f0-9]{64}$", description: 发现列表配对时提供；手动配对时省略 }
+                address: { type: string, format: ipv4, description: RFC1918 私有 IPv4；手动配对时仅需该地址和配对码 }
+                port: { type: integer, minimum: 1, maximum: 65535, description: 手动配对可选；填写后通过该 TLS 端口验证对端身份，不依赖 UDP 查询。发现列表配对时与 peerId 一同提供 }
                 pairingCode: { type: string }
-                nickname: { type: string, maxLength: 80 }
+                nickname: { type: string, maxLength: 80, description: 可选的对端本地备注 }
       responses:
         "200": { description: 信封 data.peer 为已配对设备 }
         "400": { description: 配对请求无效 }
         "403": { description: 需要受信任的桌面界面 }
         "409": { description: 配对码无效、已过期或设备身份冲突 }
+        "504": { description: 对端配对发现端口不可达 }
   /lan-sharing/peers/{peerId}:
     delete:
       tags: [lan-sharing]

@@ -29,12 +29,145 @@ func TestPairingCodeExpiresAndIsConsumedOnce(t *testing.T) {
 	if err := manager.consumePairingCode("PAIRING-CODE"); err != nil {
 		t.Fatalf("consume valid code: %v", err)
 	}
+	if got := manager.pairingCodeForProbe(); got != "PAIRING-CODE" {
+		t.Fatalf("consumed code must remain available for trusted retry, got %q", got)
+	}
 	if err := manager.consumePairingCode("PAIRING-CODE"); !errors.Is(err, ErrPairingCode) {
 		t.Fatalf("reused code error = %v", err)
 	}
 	manager.setPairingCode("EXPIRED", time.Now().Add(-time.Second))
 	if err := manager.consumePairingCode("EXPIRED"); !errors.Is(err, ErrPairingCode) {
 		t.Fatalf("expired code error = %v", err)
+	}
+	if got := manager.pairingCodeForProbe(); got != "" {
+		t.Fatalf("expired code should not answer probes, got %q", got)
+	}
+}
+
+func TestPairRequestRejectsInvalidDiscoveryFields(t *testing.T) {
+	_, manager := newTestManager(t)
+	for _, request := range []PairRequest{
+		{Address: "192.168.1.20", PairingCode: "ONE-TIME", PeerID: strings.Repeat("a", 64)},
+		{Address: "192.168.1.20", PairingCode: "ONE-TIME", Port: -1},
+	} {
+		if _, err := manager.PairPeer(context.Background(), request); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("partial discovery fields accepted: %#v, err=%v", request, err)
+		}
+	}
+}
+
+func TestManualPairingWithPortWorksWithoutUDPDiscovery(t *testing.T) {
+	if _, err := FindPrivateEndpoints(); err != nil {
+		t.Skipf("private LAN adapter unavailable: %v", err)
+	}
+	var blocker *net.UDPConn
+	for attempt := 0; attempt < 20; attempt++ {
+		var err error
+		blocker, err = net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: broadcastDiscoveryPort})
+		if err == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if blocker == nil {
+		t.Skip("UDP discovery port is occupied by another process")
+	}
+	defer blocker.Close()
+	_, initiator := newTestManager(t)
+	_, recipient := newTestManager(t)
+	recipientStatus, err := recipient.Start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := initiator.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	address, portText, err := net.SplitHostPort(recipientStatus.Endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := PairRequest{Address: address, Port: port, PairingCode: "WRONG"}
+	if _, err := initiator.PairPeer(context.Background(), request); !errors.Is(err, ErrPairingCode) {
+		t.Fatalf("incorrect direct pairing code error = %v", err)
+	}
+	if recipient.isTrusted(initiator.NodeID()) {
+		t.Fatal("wrong direct pairing code established trust")
+	}
+	request.PairingCode = recipientStatus.PairingCode
+	paired, err := initiator.PairPeer(context.Background(), request)
+	if err != nil {
+		t.Fatalf("manual direct pair: %v", err)
+	}
+	if paired.PeerID != recipient.NodeID() || !recipient.isTrusted(initiator.NodeID()) || !initiator.isTrusted(recipient.NodeID()) {
+		t.Fatalf("direct pairing trust mismatch: %#v", paired)
+	}
+}
+
+func TestManualPairingTrustsBothPeersAndRepairsOneSidedTrust(t *testing.T) {
+	if _, err := FindPrivateEndpoints(); err != nil {
+		t.Skipf("private LAN adapter unavailable: %v", err)
+	}
+	initiatorDB, initiator := newTestManager(t)
+	_, recipient := newTestManager(t)
+	recipientStatus, err := recipient.Start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	address, portText, err := net.SplitHostPort(recipientStatus.Endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if peerID, peerPort, err := queryPairEndpoint(probeCtx, net.ParseIP(address), broadcastDiscoveryPort, recipientStatus.PairingCode); err != nil || peerID != recipient.NodeID() || peerPort != port {
+		t.Fatalf("recipient probe = %s:%d, err=%v", peerID, peerPort, err)
+	}
+	if _, err := initiator.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	request := PairRequest{Address: address, PairingCode: recipientStatus.PairingCode}
+	paired, err := initiator.PairPeer(context.Background(), request)
+	if err != nil {
+		t.Fatalf("manual pair: %v", err)
+	}
+	if paired.PeerID != recipient.NodeID() || !recipient.isTrusted(initiator.NodeID()) || !initiator.isTrusted(recipient.NodeID()) {
+		t.Fatalf("trust mismatch: paired=%s, initiator trusts=%t, recipient trusts=%t", paired.PeerID, initiator.isTrusted(recipient.NodeID()), recipient.isTrusted(initiator.NodeID()))
+	}
+	if recipient.hasActivePairingCode() {
+		t.Fatal("recipient pairing code should be consumed")
+	}
+
+	// A prior client could lose the reply after the recipient persisted trust.
+	if err := initiatorDB.Where("node_id = ?", recipient.NodeID()).Delete(&model.LANTrustedPeer{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if initiator.isTrusted(recipient.NodeID()) {
+		t.Fatal("test setup should leave trust only on the recipient")
+	}
+	if _, err := initiator.PairPeer(context.Background(), request); err != nil {
+		t.Fatalf("repair one-sided trust after code consumption: %v", err)
+	}
+	if !initiator.isTrusted(recipient.NodeID()) {
+		t.Fatal("initiator trust was not repaired")
+	}
+	if _, err := initiator.PairPeer(context.Background(), PairRequest{
+		PeerID: recipient.NodeID(), Address: address, Port: port, PairingCode: recipientStatus.PairingCode,
+	}); err != nil {
+		t.Fatalf("discovered peer pairing path: %v", err)
+	}
+	if err := recipient.RevokePeer(context.Background(), initiator.NodeID()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := initiator.PairPeer(context.Background(), request); err == nil {
+		t.Fatal("revoked peer should not reconnect with a consumed pairing code")
 	}
 }
 
@@ -46,6 +179,9 @@ func TestRegisterPeerHandlerAcceptsMethodPatternAndReservesBuiltins(t *testing.T
 	}
 	if err := manager.RegisterPeerHandler("POST /pair", handler); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("reserved pairing route error = %v", err)
+	}
+	if err := manager.RegisterPeerHandler("GET /pair/probe", handler); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("reserved pairing proof route error = %v", err)
 	}
 	if err := manager.RegisterPeerHandler("GET /collaboration/canvases", handler); !errors.Is(err, ErrConflict) {
 		t.Fatalf("built-in collaboration route error = %v", err)

@@ -314,7 +314,11 @@ func writeLANSharingError(c *gin.Context, err error) {
 		fail(c, http.StatusBadRequest, app.BadAuthRequest("局域网共享请求无效"))
 	case errors.Is(err, lansharing.ErrNotFound):
 		fail(c, http.StatusNotFound, app.NotFound("局域网共享记录不存在"))
-	case errors.Is(err, lansharing.ErrConflict), errors.Is(err, lansharing.ErrPairingCode):
+	case errors.Is(err, lansharing.ErrPairingCode):
+		fail(c, http.StatusConflict, app.NewAppError(http.StatusConflict, "配对码无效或已过期，请刷新对端配对码后重试"))
+	case errors.Is(err, lansharing.ErrPeerUnreachable):
+		fail(c, http.StatusGatewayTimeout, app.NewAppError(http.StatusGatewayTimeout, "对端未响应配对查询，请检查 IP、端口、配对码有效期和网络连通性"))
+	case errors.Is(err, lansharing.ErrConflict):
 		fail(c, http.StatusConflict, app.NewAppError(http.StatusConflict, "局域网共享状态已变化，请刷新后重试"))
 	case errors.Is(err, lansharing.ErrPeerNotTrusted):
 		fail(c, http.StatusForbidden, app.Forbidden("设备尚未建立信任关系"))

@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/grandcat/zeroconf"
 )
@@ -154,6 +155,24 @@ func Browse(ctx context.Context, onPeer func(Peer)) error {
 		return err
 	}
 	return consumeBrowseEntries(ctx, entries, onPeer)
+}
+
+// A new resolver keeps querying after zeroconf stops probing on its first entry,
+// which may be our own advertisement rather than a remote device.
+func browseWithRefresh(ctx context.Context, refreshInterval, retryDelay time.Duration, browse func(context.Context) error) {
+	for ctx.Err() == nil {
+		browseCtx, cancel := context.WithTimeout(ctx, refreshInterval)
+		_ = browse(browseCtx)
+		cancel()
+		if ctx.Err() != nil {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(retryDelay):
+		}
+	}
 }
 
 func consumeBrowseEntries(ctx context.Context, entries <-chan *zeroconf.ServiceEntry, onPeer func(Peer)) error {

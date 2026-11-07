@@ -6,6 +6,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/grandcat/zeroconf"
 )
@@ -184,5 +185,37 @@ func TestConsumeBrowseEntriesStopsWhenResolverClosesChannel(t *testing.T) {
 	close(entries)
 	if err := consumeBrowseEntries(context.Background(), entries, func(Peer) {}); err == nil {
 		t.Fatal("closed resolver entries should stop discovery")
+	}
+}
+
+func TestBrowseWithRefreshRequeriesAfterTimeout(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sessions := 0
+	browseWithRefresh(ctx, time.Millisecond, time.Millisecond, func(browseCtx context.Context) error {
+		sessions++
+		if sessions == 3 {
+			cancel()
+		}
+		<-browseCtx.Done()
+		return browseCtx.Err()
+	})
+	if sessions != 3 {
+		t.Fatalf("browse sessions = %d, want a fresh query after each timeout", sessions)
+	}
+}
+
+func TestBrowseWithRefreshRetriesFailedResolverAndStopsOnCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	browseWithRefresh(ctx, time.Second, time.Millisecond, func(context.Context) error {
+		calls++
+		if calls == 2 {
+			cancel()
+		}
+		return errors.New("resolver unavailable")
+	})
+	if calls != 2 {
+		t.Fatalf("browse calls = %d, want one retry then stop", calls)
 	}
 }

@@ -37,10 +37,10 @@ const POLL_INTERVAL_MS = 2_000;
 
 type ResourceBindings = Record<string, Record<string, string>>;
 type PeerLocation = { peerId: string; address: string; port: number; nickname?: string; discovered: boolean };
-type ManualPairForm = { peerId: string; address: string; port?: number; pairingCode: string; nickname: string };
+type ManualPairForm = { address: string; port?: number; pairingCode: string };
 type CatalogEntry = LanSharingAsset;
 
-const emptyManualPair: ManualPairForm = { peerId: "", address: "", pairingCode: "", nickname: "" };
+const emptyManualPair: ManualPairForm = { address: "", pairingCode: "" };
 
 function errorMessage(error: unknown) {
     return error instanceof Error ? error.message : "请求失败，请重试";
@@ -432,6 +432,19 @@ export function LanSharingPane() {
         }
     };
 
+    const renewPairingCode = async () => {
+        setBusy("pairing-code");
+        setActionError("");
+        try {
+            setStatus(await startLanSharing());
+            message.success("配对码已更新");
+        } catch (error) {
+            setActionError(errorMessage(error));
+        } finally {
+            setBusy("");
+        }
+    };
+
     const saveLocalDeviceName = async (event: FormEvent<HTMLFormElement>) => {
         event.preventDefault();
         setBusy("device-name");
@@ -448,16 +461,18 @@ export function LanSharingPane() {
         }
     };
 
-    const completePairing = async (peer: PeerLocation, code: string, peerNickname: string) => {
-        setBusy(`pair:${peer.peerId}`);
+    const completePairing = async (peer: PeerLocation | { address: string; port?: number }, code: string, peerNickname = "") => {
+        setBusy(`pair:${peer.address}`);
         setActionError("");
         try {
             await pairLanSharingPeer({
-                peerId: peer.peerId.trim().toLowerCase(),
                 address: peer.address.trim(),
-                port: peer.port,
                 pairingCode: code.trim(),
-                nickname: peerNickname.trim() || peer.nickname || peer.peerId,
+                ...("peerId" in peer ? {
+                    peerId: peer.peerId.trim().toLowerCase(),
+                    port: peer.port,
+                    nickname: peerNickname.trim() || peer.nickname || peer.peerId,
+                } : peer.port ? { port: peer.port } : {}),
             });
             setPairingPeer(undefined);
             setManualPairOpen(false);
@@ -467,7 +482,7 @@ export function LanSharingPane() {
             message.success("设备已配对");
             await refresh();
         } catch (error) {
-            setActionError(errorMessage(error));
+            setActionError(`配对 ${peer.address} 失败：${errorMessage(error)}`);
         } finally {
             setBusy("");
         }
@@ -481,22 +496,20 @@ export function LanSharingPane() {
 
     const submitManualPairing = async (event: FormEvent<HTMLFormElement>) => {
         event.preventDefault();
-        const peerId = manualPair.peerId.trim().toLowerCase();
         const address = manualPair.address.trim();
-        const port = Number(manualPair.port);
-        if (!/^[a-f0-9]{64}$/u.test(peerId)) {
-            setActionError("设备指纹需要 64 位十六进制字符");
-            return;
-        }
         if (!isPrivateIPv4(address)) {
             setActionError("请输入 RFC1918 私有 IPv4 地址");
             return;
         }
-        if (!Number.isInteger(port) || port < 1 || port > 65535 || !manualPair.pairingCode.trim()) {
-            setActionError("请检查端口和一次性配对码");
+        if (!manualPair.pairingCode.trim()) {
+            setActionError("请输入对方的一次性配对码");
             return;
         }
-        await completePairing({ peerId, address, port, discovered: false }, manualPair.pairingCode, manualPair.nickname);
+        if (manualPair.port !== undefined && (!Number.isInteger(manualPair.port) || manualPair.port < 1 || manualPair.port > 65535)) {
+            setActionError("端口必须在 1 到 65535 之间");
+            return;
+        }
+        await completePairing({ address, port: manualPair.port }, manualPair.pairingCode);
     };
 
     const confirmRevoke = (peer: LanSharingTrustedPeer) => {
@@ -592,6 +605,7 @@ export function LanSharingPane() {
     const resourceOptions = resources.map((resource) => ({ value: resource.id, label: `${resourceLabel(resource)} · ${resource.id}` }));
     const listeningEndpoints = status?.endpoints?.length ? status.endpoints : status?.endpoint ? [status.endpoint] : [];
     const advertisedEndpoints = new Set(status?.advertisedEndpoints ?? []);
+    const discoveredDeviceCount = new Set(discovered.map((peer) => peer.peerId)).size;
 
     return (
         <div className="settings-pane space-y-5">
@@ -650,17 +664,20 @@ export function LanSharingPane() {
                             {listeningEndpoints.map((endpoint) => (
                                 <li key={endpoint} className="flex min-w-0 flex-wrap gap-x-2">
                                     <code className="break-all text-foreground">{endpoint}</code>
-                                    <span>{advertisedEndpoints.has(endpoint) ? "mDNS 已发布" : "需手动输入地址"}</span>
+                                    <span>{advertisedEndpoints.has(endpoint) ? "本机 mDNS 已发布" : "需手动输入地址"}</span>
                                 </li>
                             ))}
                         </ul>
                     </div>
                 ) : null}
-                {status?.enabled && status.pairingCode ? (
+                {status?.enabled ? (
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-[var(--r-sm)] border border-border px-3 py-2">
                         <span className="text-sm text-foreground/65">配对码</span>
-                        <code className="select-all text-base font-semibold text-foreground">{status.pairingCode}</code>
+                        <code className="select-all text-base font-semibold text-foreground">{status.pairingCode || "已过期"}</code>
                         {pairingExpiry(status.pairingCodeExpiresAt) ? <span className="text-sm text-foreground/55">{pairingExpiry(status.pairingCodeExpiresAt)}</span> : null}
+                        <Button size="small" icon={<RefreshCw className="size-3.5" />} onClick={() => void renewPairingCode()} loading={busy === "pairing-code"} disabled={Boolean(busy)}>
+                            更新配对码
+                        </Button>
                     </div>
                 ) : null}
             </section>
@@ -676,11 +693,11 @@ export function LanSharingPane() {
             <section className="settings-section space-y-3" aria-label="发现的设备">
                 <div className="settings-pane-header flex items-center justify-between gap-3">
                     <h2>发现的设备</h2>
-                    <span className="text-sm text-foreground/55">{discovered.length}</span>
+                    <span className="text-sm text-foreground/55">{discoveredDeviceCount}</span>
                 </div>
                 {loading ? <p className="text-sm text-foreground/55" role="status">正在读取设备…</p> : discovered.length === 0 ? <p className="text-sm text-foreground/55">没有发现可配对设备</p> : null}
                 {discovered.map((peer) => (
-                    <div key={peer.peerId} className="border-b border-border py-3 last:border-b-0">
+                    <div key={`${peer.peerId}:${peer.address}:${peer.port}`} className="border-b border-border py-3 last:border-b-0">
                         <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
                             <div className="min-w-0">
                                 <div className="break-words font-medium">{peer.nickname || peer.peerId}</div>
@@ -690,7 +707,7 @@ export function LanSharingPane() {
                                 配對
                             </Button>
                         </div>
-                        {pairingPeer?.peerId === peer.peerId ? (
+                        {pairingPeer?.peerId === peer.peerId && pairingPeer.address === peer.address && pairingPeer.port === peer.port ? (
                             <form className="mt-3 grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto]" onSubmit={submitPairing}>
                                 <label className="min-w-0 space-y-1 text-sm">
                                     <span>对方配对码</span>
@@ -700,7 +717,7 @@ export function LanSharingPane() {
                                     <span>设备名称</span>
                                     <Input value={nickname} onChange={(event) => setNickname(event.target.value)} autoComplete="off" />
                                 </label>
-                                <Button type="primary" htmlType="submit" loading={busy === `pair:${peer.peerId}`} disabled={!pairingCode.trim() || Boolean(busy)} className="self-end">确认配对</Button>
+                                <Button type="primary" htmlType="submit" loading={busy === `pair:${peer.address}`} disabled={!pairingCode.trim() || Boolean(busy)} className="self-end">确认配对</Button>
                                 <Button htmlType="button" onClick={() => setPairingPeer(undefined)} disabled={Boolean(busy)} className="self-end">取消</Button>
                             </form>
                         ) : null}
@@ -711,26 +728,18 @@ export function LanSharingPane() {
                         {manualPairOpen ? "收起手动配对" : "手动配对设备"}
                     </Button>
                     {manualPairOpen ? (
-                        <form className="mt-2 grid min-w-0 gap-3 sm:grid-cols-2 lg:grid-cols-3" onSubmit={submitManualPairing}>
-                            <label className="min-w-0 space-y-1 text-sm">
-                                <span>设备指纹</span>
-                                <Input value={manualPair.peerId} onChange={(event) => setManualPair((current) => ({ ...current, peerId: event.target.value }))} maxLength={64} minLength={64} pattern="[A-Fa-f0-9]{64}" autoComplete="off" required />
-                            </label>
+                        <form className="mt-2 grid min-w-0 gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_7rem_minmax(0,1fr)_auto]" onSubmit={submitManualPairing}>
                             <label className="min-w-0 space-y-1 text-sm">
                                 <span>私有 IPv4</span>
                                 <Input value={manualPair.address} onChange={(event) => setManualPair((current) => ({ ...current, address: event.target.value }))} inputMode="numeric" placeholder="192.168.1.20" required />
                             </label>
                             <label className="min-w-0 space-y-1 text-sm">
-                                <span>端口</span>
-                                <InputNumber className="w-full" value={manualPair.port} min={1} max={65535} onChange={(port) => setManualPair((current) => ({ ...current, port: port ?? undefined }))} required />
+                                <span>端口（可选）</span>
+                                <InputNumber className="w-full" value={manualPair.port} min={1} max={65535} onChange={(port) => setManualPair((current) => ({ ...current, port: port ?? undefined }))} />
                             </label>
                             <label className="min-w-0 space-y-1 text-sm">
                                 <span>一次性配对码</span>
                                 <Input value={manualPair.pairingCode} onChange={(event) => setManualPair((current) => ({ ...current, pairingCode: event.target.value }))} autoComplete="off" required />
-                            </label>
-                            <label className="min-w-0 space-y-1 text-sm">
-                                <span>设备名称</span>
-                                <Input value={manualPair.nickname} onChange={(event) => setManualPair((current) => ({ ...current, nickname: event.target.value }))} autoComplete="off" />
                             </label>
                             <Button type="primary" htmlType="submit" loading={busy.startsWith("pair:")} disabled={Boolean(busy)} className="self-end">配对设备</Button>
                         </form>
