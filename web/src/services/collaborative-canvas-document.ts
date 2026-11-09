@@ -29,7 +29,8 @@ export type PortableSharedCanvasContent = Omit<SharedCanvasContent, "nodes" | "c
     timeline?: PortableValue;
 };
 
-export type SharedCanvasAssetHashResolver = (input: { field: SharedCanvasAssetField; localValue: string; path: string[] }) => string | undefined;
+export type SharedCanvasAssetSource = { field: SharedCanvasAssetField; value: string };
+export type SharedCanvasAssetHashResolver = (input: { field: SharedCanvasAssetField; localValue: string; path: string[]; source?: SharedCanvasAssetSource }) => string | undefined;
 
 export type SharedCanvasLocalAssetResolver = (input: { field: SharedCanvasAssetField; contentHash: string; path: string[] }) => string | undefined;
 
@@ -107,7 +108,14 @@ function replaceWithPortableAssetReferences(value: unknown, path: string[], reso
             const field = key as SharedCanvasAssetField;
             const referencePath = [...path, key];
             const mediaReference = mediaAssetPaths.has(JSON.stringify(referencePath)) && isLocalMediaReference(item);
-            const contentHash = field === "storageKey" || field === "resourceId" || ((field === "dataUrl" || mediaReference) && isLocalMediaReference(item)) ? resolveHash({ field, localValue: item, path: referencePath }) : undefined;
+            const record = value as Record<string, unknown>;
+            // Object URLs are ephemeral aliases of the durable media, not storage keys.
+            // A previewContent thumbnail may differ from the original, so keep it separate.
+            const sourceField = typeof record.storageKey === "string" && record.storageKey ? "storageKey" : "resourceId";
+            const sourceValue = record[sourceField];
+            const source = field !== "previewContent" && /^(?:blob:|data:)/i.test(item) && typeof sourceValue === "string" && sourceValue
+                ? { field: sourceField, value: sourceValue } as SharedCanvasAssetSource : undefined;
+            const contentHash = field === "storageKey" || field === "resourceId" || ((field === "dataUrl" || mediaReference) && isLocalMediaReference(item)) ? resolveHash({ field, localValue: item, path: referencePath, source }) : undefined;
             if (contentHash) {
                 result[key] = { __beeftvSharedAsset: true, contentHash, localField: field } satisfies SharedCanvasAssetReference;
             } else if (!mediaReference && field !== "storageKey" && field !== "resourceId" && !(field === "dataUrl" && isLocalMediaReference(item))) result[key] = item;
@@ -163,9 +171,9 @@ export function toPortableSharedCanvasContent(content: SharedCanvasContent, reso
 }
 
 export function collectSharedCanvasAssetReferences(content: SharedCanvasContent) {
-    const references: Array<{ field: SharedCanvasAssetField; value: string; path: string[] }> = [];
-    toPortableSharedCanvasContent(content, ({ field, localValue, path }) => {
-        references.push({ field, value: localValue, path });
+    const references: Array<{ field: SharedCanvasAssetField; value: string; path: string[]; source?: SharedCanvasAssetSource }> = [];
+    toPortableSharedCanvasContent(content, ({ field, localValue, path, source }) => {
+        references.push({ field, value: localValue, path, ...(source ? { source } : {}) });
         return undefined;
     });
     return references;
@@ -173,6 +181,40 @@ export function collectSharedCanvasAssetReferences(content: SharedCanvasContent)
 
 export function restoreLocalSharedCanvasContent(content: PortableSharedCanvasContent, resolveLocalValue: SharedCanvasLocalAssetResolver): SharedCanvasContent {
     return replaceWithLocalAssetReferences(content, [], resolveLocalValue) as SharedCanvasContent;
+}
+
+// A missing local file projects as an absent field. Editing its node must not
+// delete the shared hash; only an actual change to that local field replaces it.
+export function retainUnresolvedSharedCanvasAssets(next: PortableSharedCanvasContent, previous: PortableSharedCanvasContent, previousLocal: SharedCanvasContent, currentLocal: SharedCanvasContent): PortableSharedCanvasContent {
+    const visit = (portable: unknown, before: unknown, localBefore: unknown, localNow: unknown): unknown => {
+        if (isAssetReference(before) && localBefore === localNow) return before;
+        if (Array.isArray(portable)) {
+            const prior = Array.isArray(before) ? before : [];
+            const localPrior = Array.isArray(localBefore) ? localBefore : [];
+            const localCurrent = Array.isArray(localNow) ? localNow : [];
+            const match = (items: unknown[], item: unknown, index: number) => {
+                const id = item && typeof item === "object" && "id" in item ? item.id : undefined;
+                return id === undefined ? items[index] : items.find((value) => value && typeof value === "object" && "id" in value && value.id === id);
+            };
+            return portable.map((item, index) => visit(item, match(prior, item, index), match(localPrior, item, index), match(localCurrent, item, index)));
+        }
+        if (!portable || typeof portable !== "object" || !localNow || typeof localNow !== "object") return portable;
+        const result = { ...portable } as Record<string, unknown>;
+        const old = (before && typeof before === "object" ? before : {}) as Record<string, unknown>;
+        const oldLocal = (localBefore && typeof localBefore === "object" ? localBefore : {}) as Record<string, unknown>;
+        const current = localNow as Record<string, unknown>;
+        const replacedHashes = new Set(Object.entries(old).flatMap(([key, value]) =>
+            isAssetReference(value) && oldLocal[key] !== current[key] ? [value.contentHash] : []));
+        for (const key of new Set([...Object.keys(result), ...Object.keys(old)])) {
+            // Replacing an unresolved media URL also invalidates absent aliases
+            // of the old file (otherwise its storageKey wins over the new URL).
+            if (isAssetReference(old[key]) && replacedHashes.has(old[key].contentHash) && current[key] === undefined && oldLocal[key] === undefined) continue;
+            const value = visit(result[key], old[key], oldLocal[key], current[key]);
+            if (value !== undefined) result[key] = value;
+        }
+        return result;
+    };
+    return visit(next, previous, previousLocal, currentLocal) as PortableSharedCanvasContent;
 }
 
 function setSharedValue(parent: Y.Map<unknown>, key: string, value: unknown) {

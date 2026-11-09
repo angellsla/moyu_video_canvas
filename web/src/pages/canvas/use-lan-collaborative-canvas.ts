@@ -2,7 +2,8 @@ import * as Y from "yjs";
 import { Awareness, removeAwarenessStates } from "y-protocols/awareness";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { scopedStorageKey, getActiveUserScope } from "@/lib/user-scope";
+import { scopedStorageKey } from "@/lib/user-scope";
+import { captureUserScope, userScopeMatches } from "@/lib/user-scope-guard";
 import { localForageInstance, SHARED_CATALOG_STORE_NAME } from "@/lib/localforage-storage";
 import {
     createLanCollaborationStreamTicket,
@@ -23,10 +24,12 @@ import {
     encodeCollaborativeCanvasState,
     readPortableSharedCanvasContent,
     restoreLocalSharedCanvasContent,
+    retainUnresolvedSharedCanvasAssets,
     type SharedCanvasContent,
     type PortableSharedCanvasContent,
 } from "@/services/collaborative-canvas-document";
-import { createSharedCanvasLocalAssetResolver, getSharedCanvasAssetReadiness, makePortableSharedCanvasContent, prepareSharedCanvasLocalAssetValues, queueSharedCanvasAssetRetries, retrySharedCanvasAssetTransfer, type SharedCanvasAssetReadiness } from "@/services/lan-collaboration-assets";
+import { createSharedCanvasLocalAssetResolver, getSharedCanvasLocalAssetBindings, getSharedCanvasAssetReadiness, makePortableSharedCanvasContent, prepareSharedCanvasLocalAssetValues, queueSharedCanvasAssetRetries, type SharedCanvasAssetReadiness } from "@/services/lan-collaboration-assets";
+import { resourceFileUrl, resourceStorageKey } from "@/services/api/resources";
 import { useCanvasStore, type CanvasProject } from "@/stores/canvas/use-canvas-store";
 import type { ViewportTransform } from "@/types/canvas";
 
@@ -44,21 +47,22 @@ type Options = {
 };
 
 const ORIGIN_REMOTE = Symbol("lan-collaborative-canvas-remote");
-const PRESENCE_THROTTLE_MS = 250;
-function stateKey(roomId: string) {
-    return scopedStorageKey(`lan-canvas:${roomId}:state`, getActiveUserScope());
+const PRESENCE_THROTTLE_MS = 80;
+const EDIT_BATCH_MS = 40;
+function stateKey(roomId: string, scope: string) {
+    return scopedStorageKey(`lan-canvas:${roomId}:state`, scope);
 }
 
-function outboxKey(roomId: string) {
-    return scopedStorageKey(`lan-canvas:${roomId}:outbox`, getActiveUserScope());
+function outboxKey(roomId: string, scope: string) {
+    return scopedStorageKey(`lan-canvas:${roomId}:outbox`, scope);
 }
 
-function cursorKey(roomId: string) {
-    return scopedStorageKey(`lan-canvas:${roomId}:cursor`, getActiveUserScope());
+function cursorKey(roomId: string, scope: string) {
+    return scopedStorageKey(`lan-canvas:${roomId}:cursor`, scope);
 }
 
-function localAssetRetryKey(roomId: string) {
-    return scopedStorageKey(`lan-canvas:${roomId}:local-asset-retry`, getActiveUserScope());
+function localAssetRetryKey(roomId: string, scope: string) {
+    return scopedStorageKey(`lan-canvas:${roomId}:local-asset-retry`, scope);
 }
 
 function parsePresence(value: unknown): PresenceState | null {
@@ -98,6 +102,8 @@ export function useLanCollaborativeCanvas({ project, projectLoaded, containerRef
     const [peerInventory, setPeerInventory] = useState<LanCanvasPeerStatus[]>([]);
     const [connected, setConnected] = useState(false);
     const [syncError, setSyncError] = useState("");
+    const [localAssetError, setLocalAssetError] = useState("");
+    const [transferError, setTransferError] = useState("");
     const [missingAssets, setMissingAssets] = useState<string[]>([]);
     const [assetReadiness, setAssetReadiness] = useState<SharedCanvasAssetReadiness | null>(null);
     const socketRef = useRef<WebSocket | null>(null);
@@ -134,8 +140,11 @@ export function useLanCollaborativeCanvas({ project, projectLoaded, containerRef
     useEffect(() => {
         if (!room || !projectLoaded || !room.sharedCanvasAssetCatalogId) return;
         const roomId = room.sharedCanvasId!;
+        const localProjectId = room.id;
         const catalogId = room.sharedCanvasAssetCatalogId;
+        const scope = captureUserScope();
         let disposed = false;
+        const alive = () => !disposed && userScopeMatches(scope);
         let reconnectTimer: number | undefined;
         let pollTimer: number | undefined;
         let cursorTimer: number | undefined;
@@ -148,16 +157,21 @@ export function useLanCollaborativeCanvas({ project, projectLoaded, containerRef
         let retryLocalAssets = false;
         let lastPortable = "";
         let projectedPortable: PortableSharedCanvasContent = { title: "", nodes: [], connections: [], directorScenes: [] };
-        let missingAssetHashes: string[] = [];
         let skipStoreWrite = false;
         let localChangePending = false;
-        let localConversionsInFlight = 0;
+        let localConversionRunning = false;
+        let localSyncTimer: number | undefined;
         let syncVersion = 0;
-        let remoteProjectionVersion = 0;
+        let assetsInFlight: Promise<void> | null = null;
+        let requestedAssets = "";
+        let localAssets: Record<string, string> = {};
+        const assetHashCache = new Map<string, string>();
         let persistTail = Promise.resolve();
         let flushTail = Promise.resolve();
         const pendingUpdates = new Map<string, Uint8Array>();
         setSyncError("");
+        setLocalAssetError("");
+        setTransferError("");
         setPresence([]);
         setPeerInventory([]);
         setConnected(false);
@@ -170,6 +184,16 @@ export function useLanCollaborativeCanvas({ project, projectLoaded, containerRef
         const awarenessOwners = new Map<number, string>();
         const peerAwarenessClients = new Map<string, Map<number, number>>();
         const cachedProject = useCanvasStore.getState().projects.find((item) => item.id === room.id);
+        let projectedLocal = projectContent(cachedProject || room);
+
+        const rememberLocalAssets = (resources: Record<string, string>) => {
+            localAssets = resources;
+            for (const [hash, id] of Object.entries(resources)) {
+                assetHashCache.set(id, hash);
+                assetHashCache.set(resourceStorageKey(id), hash);
+                assetHashCache.set(resourceFileUrl(id), hash);
+            }
+        };
 
         const refreshPeerPresence = (peerId: string, expiresAt?: string, fallback?: PresenceState | null) => {
             let state = fallback || null;
@@ -199,36 +223,28 @@ export function useLanCollaborativeCanvas({ project, projectLoaded, containerRef
             const outbox = [...pendingUpdates.entries()].map(([id, update]) => [id, Array.from(update)] as [string, number[]]);
             const savedCursor = cursor;
             persistTail = persistTail.catch(() => undefined).then(async () => {
-                await store.setItem(stateKey(roomId), state);
-                await store.setItem(outboxKey(roomId), outbox);
-                await store.setItem(cursorKey(roomId), savedCursor);
+                await store.setItem(stateKey(roomId, scope.userScope), state);
+                await store.setItem(outboxKey(roomId, scope.userScope), outbox);
+                await store.setItem(cursorKey(roomId, scope.userScope), savedCursor);
             });
             return persistTail;
         };
 
         const applyRemoteContent = async () => {
-            if (localChangePending) return;
-            const version = ++remoteProjectionVersion;
+            if (!alive() || localChangePending) return;
             const portable = readPortableSharedCanvasContent(doc);
             const hashes = collectContentHashes(portable);
-            let localAssets: Record<string, string> = {};
-            if (hashes.length) localAssets = await prepareSharedCanvasLocalAssetValues(catalogId, hashes);
-            if (disposed || version !== remoteProjectionVersion) return;
             const nextMissing = hashes.filter((hash) => !localAssets[hash]);
-            const previouslyMissing = missingAssetHashes;
-            const assetsRecovered = previouslyMissing.some((hash) => !nextMissing.includes(hash));
-            missingAssetHashes = nextMissing;
             setMissingAssets(nextMissing);
-            if (nextMissing.length) void queueSharedCanvasAssetRetries(catalogId, nextMissing).catch(() => undefined);
-            void getSharedCanvasAssetReadiness(catalogId, hashes).then((status) => {
-                if (!disposed && version === remoteProjectionVersion) setAssetReadiness(status);
-            }).catch(() => undefined);
+            if (JSON.stringify(hashes.sort()) !== requestedAssets) void refreshAssets();
             const content = restoreLocalSharedCanvasContent(portable, createSharedCanvasLocalAssetResolver(localAssets));
             const serialized = JSON.stringify(portable);
             const documentChanged = serialized !== lastPortable;
             lastPortable = serialized;
             projectedPortable = portable;
-            if (!documentChanged && !assetsRecovered) return;
+            const localChanged = JSON.stringify(content) !== JSON.stringify(projectedLocal);
+            projectedLocal = content;
+            if (!documentChanged && !localChanged) return;
             skipStoreWrite = true;
             try {
                 useCanvasStore.getState().updateProject(room.id, {
@@ -244,6 +260,34 @@ export function useLanCollaborativeCanvas({ project, projectLoaded, containerRef
             }
         };
 
+        // Network probes and file transfers never hold up node/content projection.
+        function refreshAssets(): Promise<void> {
+            if (assetsInFlight) return assetsInFlight;
+            const hashes = collectContentHashes(readPortableSharedCanvasContent(doc)).sort();
+            requestedAssets = JSON.stringify(hashes);
+            const run = async () => {
+                if (!alive()) return;
+                const missing = hashes.filter((hash) => !localAssets[hash]);
+                if (missing.length) await queueSharedCanvasAssetRetries(catalogId, missing);
+                const resources = await prepareSharedCanvasLocalAssetValues(catalogId, hashes);
+                if (!alive()) return;
+                rememberLocalAssets(resources);
+                await applyRemoteContent();
+                const readiness = await getSharedCanvasAssetReadiness(catalogId, hashes);
+                if (alive()) {
+                    setTransferError("");
+                    if (requestedAssets === JSON.stringify(collectContentHashes(readPortableSharedCanvasContent(doc)).sort())) setAssetReadiness(readiness);
+                }
+            };
+            assetsInFlight = run().catch((error) => {
+                if (alive()) setTransferError(error instanceof Error ? error.message : "协作素材暂未送达，后台将重试");
+            }).finally(() => {
+                assetsInFlight = null;
+                if (alive() && requestedAssets !== JSON.stringify(collectContentHashes(readPortableSharedCanvasContent(doc)).sort())) void refreshAssets();
+            });
+            return assetsInFlight;
+        }
+
         const onDocUpdate = (update: Uint8Array, origin: unknown) => {
             if (origin !== ORIGIN_REMOTE) {
                 const id = encodeLanSharingUpdate(update);
@@ -251,7 +295,9 @@ export function useLanCollaborativeCanvas({ project, projectLoaded, containerRef
             }
             void persistDocument().catch((error) => setSyncError(error instanceof Error ? error.message : "协作画布本地缓存失败"));
             if (origin === ORIGIN_REMOTE) void applyRemoteContent().catch((error) => setSyncError(error instanceof Error ? error.message : "协作画布内容读取失败"));
-            else void flushUpdates();
+            else void flushUpdates().catch((error) => {
+                if (alive()) setSyncError(error instanceof Error ? error.message : "协作画布本地缓存失败");
+            });
         };
         doc.on("update", onDocUpdate);
 
@@ -260,9 +306,10 @@ export function useLanCollaborativeCanvas({ project, projectLoaded, containerRef
             const run = async () => {
                 let after = cursor;
                 for (;;) {
+                    if (!alive()) return;
                     const page = await getLanCollaborationCanvasUpdates(roomId, after);
-                    if (disposed) return;
-                    for (const update of page.updates) applyCollaborativeCanvasUpdate(doc, decodeLanCollaborationCanvasUpdate(update), ORIGIN_REMOTE);
+                    if (!alive()) return;
+                    if (page.updates.length) applyCollaborativeCanvasUpdate(doc, Y.mergeUpdates(page.updates.map(decodeLanCollaborationCanvasUpdate)), ORIGIN_REMOTE);
                     after = nextLanCollaborationUpdateCursor(after, page);
                     cursor = after;
                     await persistDocument();
@@ -277,51 +324,72 @@ export function useLanCollaborativeCanvas({ project, projectLoaded, containerRef
         async function flushUpdates() {
             flushTail = flushTail.catch(() => undefined).then(async () => {
                 for (const [id, update] of [...pendingUpdates]) {
-                    if (disposed) return;
+                    if (!alive()) return;
                     try {
                         await publishLanCollaborationCanvasUpdate(roomId, update);
                         pendingUpdates.delete(id);
-                        const socket = socketRef.current;
-                        if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "update", updateBase64: encodeLanSharingUpdate(update) }));
                     } catch (error) {
                         if (!disposed) setSyncError(error instanceof Error ? error.message : "协作更新暂未送达");
                         break;
                     }
                 }
                 await persistDocument();
+                if (alive() && !pendingUpdates.size) setSyncError("");
             });
             return flushTail;
         }
 
-        async function retryAssets() {
-            if (localConversionsInFlight) return;
-            if (missingAssetHashes.length) {
-                await retrySharedCanvasAssetTransfer(catalogId, missingAssetHashes);
-                await applyRemoteContent();
-            }
-            if (!retryLocalAssets) return;
-            retryLocalAssets = false;
-            await retrySharedCanvasAssetTransfer(catalogId, []);
-            const current = useCanvasStore.getState().projects.find((item) => item.id === cachedProject?.id);
+        async function syncLocalContent() {
+            if (!alive() || !initialized || localConversionRunning) return;
+            const current = useCanvasStore.getState().projects.find((item) => item.id === localProjectId);
             if (!current) return;
-            const portable = await makePortableSharedCanvasContent(catalogId, projectContent(current));
-            const serialized = JSON.stringify(portable);
-            if (serialized !== lastPortable) {
-                applyCollaborativeCanvasLocalChanges(doc, projectedPortable, portable);
+            const version = syncVersion;
+            const currentContent = projectContent(current);
+            const basePortable = projectedPortable;
+            const baseLocal = projectedLocal;
+            localConversionRunning = true;
+            try {
+                const prepared = await makePortableSharedCanvasContent(catalogId, currentContent, assetHashCache);
+                const resources = await getSharedCanvasLocalAssetBindings(catalogId);
+                if (!alive()) return;
+                rememberLocalAssets(resources);
+                const portable = retainUnresolvedSharedCanvasAssets(prepared, basePortable, baseLocal, currentContent);
+                // Commit even during continuous dragging; subsequent edits use this
+                // local baseline, not remote fields the user has not seen yet.
+                applyCollaborativeCanvasLocalChanges(doc, basePortable, portable);
+                projectedPortable = portable;
+                projectedLocal = currentContent;
+                if (version !== syncVersion) return;
+                localChangePending = false;
+                retryLocalAssets = false;
+                await store.setItem(localAssetRetryKey(roomId, scope.userScope), false);
+                if (version === syncVersion) await applyRemoteContent();
+                if (alive()) setLocalAssetError("");
+            } catch (error) {
+                if (alive()) setLocalAssetError(error instanceof Error ? error.message : "共享素材准备失败");
+            } finally {
+                localConversionRunning = false;
+                if (alive() && version !== syncVersion) scheduleLocalSync();
             }
-            localChangePending = false;
-            await applyRemoteContent();
-            await store.setItem(localAssetRetryKey(roomId), false);
+        }
+
+        function scheduleLocalSync() {
+            if (localSyncTimer !== undefined || localConversionRunning || !initialized) return;
+            localSyncTimer = window.setTimeout(() => {
+                localSyncTimer = undefined;
+                void syncLocalContent();
+            }, EDIT_BATCH_MS);
         }
 
         async function connect() {
-            if (disposed) return;
+            if (!alive()) return;
             try {
                 const [ticketResponse, status, peerState] = await Promise.all([
                     createLanCollaborationStreamTicket(roomId),
                     getLanSharingStatus(),
                     getLanSharingPeers(),
                 ]);
+                if (!alive()) return;
                 localNodeIdRef.current = status.nodeId;
                 localNicknameRef.current = status.nickname || "本机";
                 nicknamesRef.current.clear();
@@ -344,6 +412,7 @@ export function useLanCollaborativeCanvas({ project, projectLoaded, containerRef
                     void catchUp().then(() => flushUpdates()).catch((error) => setSyncError(error instanceof Error ? error.message : "协作画布同步失败"));
                 };
                 socket.onmessage = (event) => {
+                    if (!alive()) return;
                     let frame: LanCollaborationServerFrame;
                     try { frame = JSON.parse(String(event.data)) as LanCollaborationServerFrame; } catch { return; }
                     if (frame.type === "error") { setSyncError(frame.message); return; }
@@ -399,40 +468,51 @@ export function useLanCollaborativeCanvas({ project, projectLoaded, containerRef
         }
 
         const readStored = async () => {
-            const stored = await store.getItem<Uint8Array>(stateKey(roomId));
-            const pending = await store.getItem<Array<[string, number[]]>>(outboxKey(roomId));
-            cursor = (await store.getItem<string>(cursorKey(roomId))) || "";
-            retryLocalAssets = (await store.getItem<boolean>(localAssetRetryKey(roomId))) === true;
+            rememberLocalAssets(await getSharedCanvasLocalAssetBindings(catalogId));
+            const stored = await store.getItem<Uint8Array>(stateKey(roomId, scope.userScope));
+            const pending = await store.getItem<Array<[string, number[]]>>(outboxKey(roomId, scope.userScope));
+            cursor = (await store.getItem<string>(cursorKey(roomId, scope.userScope))) || "";
+            retryLocalAssets = (await store.getItem<boolean>(localAssetRetryKey(roomId, scope.userScope))) === true || retryLocalAssets;
+            if (!alive()) return;
+            localChangePending = localChangePending || retryLocalAssets;
             for (const [id, bytes] of pending || []) pendingUpdates.set(id, new Uint8Array(bytes));
             if (stored) applyCollaborativeCanvasUpdate(doc, new Uint8Array(stored), ORIGIN_REMOTE);
             if (stored) {
+                if (localChangePending) {
+                    projectedPortable = readPortableSharedCanvasContent(doc);
+                    projectedLocal = restoreLocalSharedCanvasContent(projectedPortable, createSharedCanvasLocalAssetResolver(localAssets));
+                }
                 await applyRemoteContent();
             }
             initialized = true;
+            if (localChangePending) scheduleLocalSync();
             if (!disposed) void connect();
         };
 
         void readStored().catch((error) => setSyncError(error instanceof Error ? error.message : "协作画布缓存读取失败"));
         pollTimer = window.setInterval(() => {
-            if (!initialized) return;
+            if (!alive() || !initialized) return;
             void catchUp().then(() => flushUpdates()).catch(() => undefined);
-            void retryAssets().catch((error) => {
-                retryLocalAssets = true;
-                if (!disposed) setSyncError(error instanceof Error ? error.message : "协作素材暂未送达，后台将重试");
-            });
+            void refreshAssets();
+            if (retryLocalAssets) scheduleLocalSync();
         }, 5_000);
         cursorTimer = window.setInterval(() => {
+            if (!alive()) return;
             const socket = socketRef.current;
             const container = containerRef.current;
             if (!socket || socket.readyState !== WebSocket.OPEN || !container) return;
             const rect = container.getBoundingClientRect();
             const pointer = pointerRef.current;
-            if (!pointer) return;
             const now = Date.now();
             if (now - lastPresenceAt < PRESENCE_THROTTLE_MS) return;
             lastPresenceAt = now;
             const currentViewport = viewportRef.current;
-            awareness.setLocalState({ online: true, x: (pointer.x - rect.left - currentViewport.x) / currentViewport.k, y: (pointer.y - rect.top - currentViewport.y) / currentViewport.k, selectionNodeIds: [...selectedNodeIdsRef.current].slice(0, 100) });
+            const nextState = {
+                online: true,
+                ...(pointer ? { x: (pointer.x - rect.left - currentViewport.x) / currentViewport.k, y: (pointer.y - rect.top - currentViewport.y) / currentViewport.k } : {}),
+                selectionNodeIds: [...selectedNodeIdsRef.current].slice(0, 100),
+            };
+            if (JSON.stringify(nextState) !== JSON.stringify(awareness.getLocalState())) awareness.setLocalState(nextState);
         }, PRESENCE_THROTTLE_MS);
         peerTimer = window.setInterval(() => {
             void getLanSharingPeers().then((peerState) => {
@@ -480,38 +560,21 @@ export function useLanCollaborativeCanvas({ project, projectLoaded, containerRef
         containerRef.current?.addEventListener("pointerleave", onPointerLeave);
 
         const unsubscribeStore = useCanvasStore.subscribe((state, previous) => {
-            if (skipStoreWrite) return;
+            if (!alive() || skipStoreWrite) return;
             const current = state.projects.find((item) => item.id === room.id);
             const before = previous.projects.find((item) => item.id === room.id);
             if (!current || !before || current === before) return;
             if (JSON.stringify(projectContent(current)) === JSON.stringify(projectContent(before))) return;
             localChangePending = true;
             retryLocalAssets = true;
-            void store.setItem(localAssetRetryKey(roomId), true).catch(() => undefined);
-            const version = ++syncVersion;
-            window.setTimeout(() => {
-                if (disposed || version !== syncVersion) return;
-                const latest = useCanvasStore.getState().projects.find((item) => item.id === room.id);
-                if (!latest) return;
-                localConversionsInFlight += 1;
-                void makePortableSharedCanvasContent(catalogId, projectContent(latest)).then((portable) => {
-                    if (disposed || version !== syncVersion) return;
-                    const serialized = JSON.stringify(portable);
-                    localChangePending = false;
-                    retryLocalAssets = false;
-                    void store.setItem(localAssetRetryKey(roomId), false).catch(() => undefined);
-                    if (serialized !== lastPortable) applyCollaborativeCanvasLocalChanges(doc, projectedPortable, portable);
-                    void applyRemoteContent().catch((error) => setSyncError(error instanceof Error ? error.message : "协作画布内容读取失败"));
-                }).catch((error) => {
-                    retryLocalAssets = true;
-                    void store.setItem(localAssetRetryKey(roomId), true).catch(() => undefined);
-                    setSyncError(error instanceof Error ? error.message : "共享素材准备失败");
-                }).finally(() => { localConversionsInFlight -= 1; });
-            }, 120);
+            void store.setItem(localAssetRetryKey(roomId, scope.userScope), true).catch(() => undefined);
+            syncVersion += 1;
+            scheduleLocalSync();
         });
 
         return () => {
             disposed = true;
+            if (localSyncTimer !== undefined) window.clearTimeout(localSyncTimer);
             if (reconnectTimer) window.clearTimeout(reconnectTimer);
             if (pollTimer) window.clearInterval(pollTimer);
             if (cursorTimer) window.clearInterval(cursorTimer);
@@ -524,6 +587,7 @@ export function useLanCollaborativeCanvas({ project, projectLoaded, containerRef
             void persistDocument().catch(() => undefined);
             awareness.setLocalState(null);
             awareness.off("update", onAwarenessUpdate);
+            awareness.destroy();
             socketRef.current?.close();
             socketRef.current = null;
             setConnected(false);
@@ -536,5 +600,5 @@ export function useLanCollaborativeCanvas({ project, projectLoaded, containerRef
         };
     }, [room?.id, room?.sharedCanvasId, room?.sharedCanvasAssetCatalogId, projectLoaded, containerRef]);
 
-    return { members, presence, connected, syncError, missingAssets, assetReadiness };
+    return { members, presence, connected, syncError: syncError || localAssetError || transferError, missingAssets, assetReadiness };
 }

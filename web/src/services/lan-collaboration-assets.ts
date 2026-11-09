@@ -1,4 +1,5 @@
 import { getActiveUserScope } from "@/lib/user-scope";
+import { assertUserScope, captureUserScope } from "@/lib/user-scope-guard";
 import { localForageStorageForScope } from "@/lib/localforage-storage";
 import { getLanSharingCatalogUpdates, addLanSharingCatalogAsset, createLanSharingCatalog, importLanSharingCatalogAsset, publishLanSharingCatalogUpdate, decodeLanSharingUpdate, type LanSharingAsset } from "@/services/api/lan-sharing";
 import { getLanSharingPeers, type LanSharingPeer, type LanSharingTrustedPeer } from "@/services/api/lan-sharing";
@@ -103,11 +104,22 @@ async function getBindings(): Promise<Bindings> {
     return readBindings(await localForageStorageForScope(getActiveUserScope()).getItem(BINDINGS_KEY));
 }
 
+let bindingsTail = Promise.resolve();
+
 async function bindResource(catalogId: string, contentHash: string, resourceId: string) {
     const store = localForageStorageForScope(getActiveUserScope());
-    const next = await getBindings();
-    next[catalogId] = { ...next[catalogId], [contentHash]: resourceId };
-    await store.setItem(BINDINGS_KEY, JSON.stringify(next));
+    const operation = bindingsTail.catch(() => undefined).then(async () => {
+        const next = readBindings(await store.getItem(BINDINGS_KEY));
+        next[catalogId] = { ...next[catalogId], [contentHash]: resourceId };
+        await store.setItem(BINDINGS_KEY, JSON.stringify(next));
+    });
+    bindingsTail = operation;
+    await operation;
+}
+
+// Read mappings without downloading/probing media on the interactive projection path.
+export async function getSharedCanvasLocalAssetBindings(catalogId: string) {
+    return (await getBindings())[catalogId] || {};
 }
 
 let retryQueueTail = Promise.resolve();
@@ -141,7 +153,8 @@ export async function retryQueuedSharedCanvasAssets() {
         try {
             const result = await retrySharedCanvasAssetTransfer(catalogId, hashes);
             await mutateAssetRetryQueue((current) => {
-                const remaining = (current[catalogId] || []).filter((hash) => result.missingHashes.includes(hash));
+                const attempted = new Set(hashes);
+                const remaining = (current[catalogId] || []).filter((hash) => !attempted.has(hash) || result.missingHashes.includes(hash));
                 if (remaining.length) current[catalogId] = remaining;
                 else delete current[catalogId];
             });
@@ -181,20 +194,25 @@ async function connectCatalog(catalogId: string) {
 }
 
 async function publishPendingCatalogUpdates(catalogId: string, catalog: SharedCatalog) {
+    const scope = captureUserScope();
     for (const update of catalog.pendingLocalUpdates()) {
+        assertUserScope(scope);
         await publishLanSharingCatalogUpdate(catalogId, update);
         await catalog.acknowledgeLocalUpdate(update);
     }
 }
 
 async function addLocalResourceToCatalog(catalogId: string, resourceId: string) {
+    const scope = captureUserScope();
     const bindings = await getBindings();
     const existingHash = Object.entries(bindings[catalogId] || {}).find(([, boundResourceId]) => boundResourceId === resourceId)?.[0];
     const catalog = await connectCatalog(catalogId);
     await publishPendingCatalogUpdates(catalogId, catalog);
     if (existingHash && await localResourceExists(resourceId)) return existingHash;
 
+    assertUserScope(scope);
     const result = await addLanSharingCatalogAsset(catalogId, resourceId);
+    assertUserScope(scope);
     catalog.upsertEntry(result.asset);
     await bindResource(catalogId, result.asset.contentHash, resourceId);
     await publishPendingCatalogUpdates(catalogId, catalog);
@@ -202,15 +220,14 @@ async function addLocalResourceToCatalog(catalogId: string, resourceId: string) 
 }
 
 async function materializeResource(value: string, field: SharedCanvasAssetField): Promise<string | undefined> {
+    const scope = captureUserScope();
     const direct = field === "resourceId" ? value : ownedResourceIdFromMediaRef(value, value);
     if (direct) return direct;
     let blob: Blob | null | undefined;
-    if (value.startsWith("data:")) {
-        try {
-            blob = await fetch(value).then((response) => response.blob());
-        } catch {
-            blob = undefined;
-        }
+    if (/^(?:data:|blob:)/i.test(value)) {
+        const response = await fetch(value);
+        if (!response.ok) throw new Error("协作素材读取失败");
+        blob = await response.blob();
     } else {
         try {
             blob = await getImageBlob(value);
@@ -228,20 +245,27 @@ async function materializeResource(value: string, field: SharedCanvasAssetField)
     if (!blob?.size) return undefined;
     const mime = blob.type || "application/octet-stream";
     const kind = mime.startsWith("image/") ? "image" : mime.startsWith("video/") ? "video" : mime.startsWith("audio/") ? "audio" : "file";
-    try {
-        return (await uploadResourceFile(blob, kind, { fileName: `shared-canvas.${mime.split("/")[1] || "bin"}` })).id;
-    } catch {
-        return undefined;
-    }
+    assertUserScope(scope);
+    return (await uploadResourceFile(blob, kind, { fileName: `shared-canvas.${mime.split("/")[1] || "bin"}` })).id;
 }
 
-export async function prepareSharedCanvasAssetHashes(catalogId: string, values: Array<{ field: SharedCanvasAssetField; value: string }>) {
-    const hashes = new Map<string, string>();
-    const pending = [...new Set(values.map(({ value }) => value))];
-    for (const value of pending) {
-        const resourceId = await materializeResource(value, values.find((item) => item.value === value)?.field || "storageKey");
+export async function prepareSharedCanvasAssetHashes(catalogId: string, values: ReturnType<typeof collectSharedCanvasAssetReferences>, hashes = new Map<string, string>()) {
+    const scope = captureUserScope();
+    for (const reference of values) {
+        const source = reference.source || reference;
+        if (!source.value.trim()) continue;
+        const cached = hashes.get(source.value);
+        if (cached) { hashes.set(reference.value, cached); continue; }
+        const resourceId = await materializeResource(source.value, source.field);
+        assertUserScope(scope);
         if (!resourceId) throw new Error("协作素材暂时无法读取，原稿已保留，请重试");
-        hashes.set(value, await addLocalResourceToCatalog(catalogId, resourceId));
+        const hash = await addLocalResourceToCatalog(catalogId, resourceId);
+        assertUserScope(scope);
+        hashes.set(source.value, hash);
+        hashes.set(reference.value, hash);
+        hashes.set(resourceId, hash);
+        hashes.set(resourceStorageKey(resourceId), hash);
+        hashes.set(resourceFileUrl(resourceId), hash);
     }
     return hashes;
 }
@@ -251,16 +275,30 @@ export async function retrySharedCanvasCatalogSync(catalogId: string) {
     await publishPendingCatalogUpdates(catalogId, catalog);
 }
 
+const catalogSyncStates = new WeakMap<SharedCatalog, { cursor: string; inFlight: Promise<SharedCatalog> | null }>();
+
 async function syncSharedCanvasCatalog(catalogId: string) {
+    const scope = captureUserScope();
     const catalog = await connectCatalog(catalogId);
-    let cursor = "";
-    for (;;) {
-        const page = await getLanSharingCatalogUpdates(catalogId, cursor);
-        for (const update of page.updates) catalog.applyRemoteUpdate(decodeLanSharingUpdate(update.updateBase64));
-        if (!page.hasMore) return catalog;
-        if (!page.cursor || page.cursor === cursor) throw new Error("共享素材清单游标无效");
-        cursor = page.cursor;
+    let state = catalogSyncStates.get(catalog);
+    if (!state) {
+        state = { cursor: "", inFlight: null };
+        catalogSyncStates.set(catalog, state);
     }
+    if (state.inFlight) return state.inFlight;
+    const current = state;
+    current.inFlight = (async () => {
+        for (;;) {
+            assertUserScope(scope);
+            const page = await getLanSharingCatalogUpdates(catalogId, current.cursor);
+            assertUserScope(scope);
+            for (const update of page.updates) catalog.applyRemoteUpdate(decodeLanSharingUpdate(update.updateBase64));
+            if (page.hasMore && (!page.cursor || page.cursor === current.cursor)) throw new Error("共享素材清单游标无效");
+            current.cursor = page.cursor || current.cursor;
+            if (!page.hasMore) return catalog;
+        }
+    })().finally(() => { current.inFlight = null; });
+    return current.inFlight;
 }
 
 export async function getSharedCanvasAssetReadiness(catalogId: string, hashes: string[]): Promise<SharedCanvasAssetReadiness> {
@@ -300,10 +338,12 @@ export function sharedCanvasPeerLocations(
 }
 
 async function ensureCatalogEntryLocal(catalogId: string, entry: SharedCanvasEntry, peers: ReturnType<typeof sharedCanvasPeerLocations>) {
+    const scope = captureUserScope();
     const bindings = await getBindings();
     const existingId = bindings[catalogId]?.[entry.contentHash];
     if (existingId && await localResourceExists(existingId)) return existingId;
     for (const peer of peers) {
+        assertUserScope(scope);
         try {
             const result = await importLanSharingCatalogAsset(catalogId, {
                 peerId: peer.peerId,
@@ -314,7 +354,9 @@ async function ensureCatalogEntryLocal(catalogId: string, entry: SharedCanvasEnt
                 mimeType: entry.mimeType,
                 size: entry.size,
             });
+            assertUserScope(scope);
             const localAsset = await addLanSharingCatalogAsset(catalogId, result.resource.id);
+            assertUserScope(scope);
             const catalog = await connectCatalog(catalogId);
             catalog.upsertEntry(localAsset.asset);
             await bindResource(catalogId, entry.contentHash, result.resource.id);
@@ -353,6 +395,7 @@ export async function validatedSharedCanvasLocalBindings(hashes: string[], bindi
 type SharedCanvasEntry = Pick<LanSharingAsset, "contentHash" | "name" | "mimeType" | "size" | "createdBy">;
 
 export async function prepareSharedCanvasLocalAssetValues(catalogId: string, hashes: string[]) {
+    const scope = captureUserScope();
     const bindings = await getBindings();
     const required = [...new Set(hashes)];
     const known = await validatedSharedCanvasLocalBindings(required, bindings[catalogId] || {}, localResourceExists);
@@ -362,6 +405,7 @@ export async function prepareSharedCanvasLocalAssetValues(catalogId: string, has
     const entries = catalog.listEntries();
     const peers = sharedCanvasPeerLocations(peerResponse.trusted, peerResponse.discovered);
     for (const hash of missing) {
+        assertUserScope(scope);
         const entry = entries.find((candidate) => candidate.contentHash === hash);
         if (!entry) continue;
         const resourceId = await ensureCatalogEntryLocal(catalogId, entry, peers);
@@ -380,10 +424,10 @@ export function createSharedCanvasLocalAssetResolver(resources: Record<string, s
     };
 }
 
-export async function makePortableSharedCanvasContent(catalogId: string, content: SharedCanvasContent): Promise<PortableSharedCanvasContent> {
+export async function makePortableSharedCanvasContent(catalogId: string, content: SharedCanvasContent, cache = new Map<string, string>()): Promise<PortableSharedCanvasContent> {
     const references = collectSharedCanvasAssetReferences(content);
-    const hashes = await prepareSharedCanvasAssetHashes(catalogId, references);
-    return toPortableSharedCanvasContent(content, ({ localValue }) => hashes.get(localValue));
+    const hashes = await prepareSharedCanvasAssetHashes(catalogId, references, cache);
+    return toPortableSharedCanvasContent(content, ({ localValue, source }) => hashes.get(source?.value || localValue));
 }
 
 export async function ensureSharedCanvasCatalog(name: string) {

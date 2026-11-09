@@ -24,6 +24,7 @@ import { DEFAULT_CANVAS_BACKGROUND_MODE, normalizeCanvasAppearance, resolveCanva
 import { parseCanvasWheelBehavior, type CanvasWheelBehavior } from "@/lib/canvas/canvas-wheel";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { persistCanvasMediaPerformanceMode, readCanvasMediaPerformanceMode } from "@/lib/canvas/canvas-performance-mode";
+import { persistRemoteCursorsVisible, readRemoteCursorsVisible } from "@/lib/canvas/canvas-collaboration-preferences";
 import { summarizeCanvasContext } from "@/lib/canvas/canvas-context-summary";
 import { DEFAULT_DRAWING_ENGINE } from "@/lib/canvas/canvas-drawing-engine";
 import { useAssetStore } from "@/stores/use-asset-store";
@@ -35,7 +36,7 @@ import { useUserStore } from "@/stores/use-user-store";
 import { App, Button, Checkbox } from "antd";
 import { exportCanvasAssetFiles } from "@/lib/canvas/canvas-assets-export";
 import { isWailsNativeShell } from "@/services/desktop-media-save";
-import { ArrowLeftRight, MousePointer2, Users, Wifi, WifiOff } from "lucide-react";
+import { ArrowLeftRight, MousePointer2, Wifi, WifiOff } from "lucide-react";
 import { AppModal } from "@/components/ui/product/app-modal";
 import { CanvasDeleteConfirmation } from "@/components/canvas/canvas-delete-confirmation";
 import { CanvasConfigComposer } from "@/components/canvas/canvas-config-composer";
@@ -102,6 +103,7 @@ import { bringCanvasNodeToFront, type CanvasNodeStackOrder } from "@/lib/canvas/
 import { CanvasNodeGraphContext, type CanvasNodeGraphContextValue } from "@/components/canvas/canvas-node-graph-context";
 import { CanvasRefreshShell } from "./canvas-refresh-shell";
 import { useLanCollaborativeCanvas, type LanCanvasPresence } from "./use-lan-collaborative-canvas";
+import { CanvasCollaborationMembers } from "./canvas-collaboration-members";
 import type { SharedCanvasAssetReadiness } from "@/services/lan-collaboration-assets";
 import type { CanvasImageEmotionPayload } from "@/components/canvas/canvas-node-emotion-panel";
 import { CanvasEmotionWorkspace } from "@/components/canvas/canvas-emotion-workspace";
@@ -177,11 +179,13 @@ function CanvasCollaborationLayer({
     nodes,
     viewport,
     status,
+    showRemoteCursors,
 }: {
     presence: LanCanvasPresence[];
     nodes: CanvasNodeData[];
     viewport: ViewportTransform;
     status?: ReactNode;
+    showRemoteCursors: boolean;
 }) {
     const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
     return (
@@ -207,7 +211,7 @@ function CanvasCollaborationLayer({
                             />,
                         ];
                     });
-                    const hasCursor = typeof member.state.x === "number" && typeof member.state.y === "number";
+                    const hasCursor = showRemoteCursors && typeof member.state.x === "number" && typeof member.state.y === "number";
                     return (
                         <Fragment key={member.peerId}>
                             {selectedNodes}
@@ -239,12 +243,16 @@ function CanvasCollaborationStatus({
     syncError,
     missingAssets,
     assetReadiness,
+    showRemoteCursors,
+    onToggleRemoteCursors,
 }: {
     members: LanCanvasPresence[];
     connected: boolean;
     syncError: string;
     missingAssets: string[];
     assetReadiness: SharedCanvasAssetReadiness | null;
+    showRemoteCursors: boolean;
+    onToggleRemoteCursors: () => void;
 }) {
     return (
         <div data-canvas-no-zoom className="canvas-collaboration-status pointer-events-auto flex min-w-0 max-w-full items-center gap-3 overflow-x-auto whitespace-nowrap rounded-sm border border-border bg-surface/95 px-2.5 py-1.5 text-xs text-foreground shadow-sm" role="status" aria-live="polite" title={syncError || undefined}>
@@ -252,24 +260,24 @@ function CanvasCollaborationStatus({
                 {connected ? <Wifi className="size-3.5 text-emerald-600" /> : <WifiOff className="size-3.5 text-foreground/55" />}
                 {connected ? "协作已连接" : "正在连接协作"}
             </span>
-            <span className="inline-flex items-center gap-1.5">
-                <Users className="size-3.5" />
-                {members.length ? members.map((member) => (
-                    <span key={member.peerId} className="inline-flex items-center gap-1">
-                        <span className={`size-1.5 rounded-full ${member.collaborating ? "bg-emerald-500" : member.online ? "bg-amber-500" : "bg-foreground/35"}`} />
-                        {member.nickname}
-                        <span className="text-foreground/55">{member.collaborating ? "协作中" : member.online ? "局域网在线" : "离线"}</span>
-                    </span>
-                )) : "等待成员"}
-            </span>
+            <CanvasCollaborationMembers members={members} assetReadiness={assetReadiness} />
             {missingAssets.length ? <span className="text-amber-700">{missingAssets.length} 项素材待同步</span> : null}
             {assetReadiness?.requiredCount ? (
-                <span title="对端数值来自共享清单声明，尚未经该设备确认">
+                <span>
                     本机素材 {assetReadiness.local.mappedCount}/{assetReadiness.requiredCount}
-                    {assetReadiness.peers.map((peer) => ` · ${peer.nickname}: ${peer.claimedCount} 项声明${peer.discovered ? "" : "（离线）"}`)}
                 </span>
             ) : null}
             {syncError ? <span className="text-red-600">同步异常</span> : null}
+            <Button
+                size="small"
+                type="text"
+                aria-pressed={showRemoteCursors}
+                title="仅影响本机的成员光标显示，成员在线状态和选区仍保留"
+                onClick={onToggleRemoteCursors}
+                icon={<MousePointer2 className="size-3.5" />}
+            >
+                {showRemoteCursors ? "隐藏成员光标" : "显示成员光标"}
+            </Button>
         </div>
     );
 }
@@ -306,6 +314,12 @@ function InfiniteCanvasPage() {
     const [assetExportOpen, setAssetExportOpen] = useState(false);
     const [includeResultVideos, setIncludeResultVideos] = useState(false);
     const [assetExporting, setAssetExporting] = useState(false);
+    const [showRemoteCursors, setShowRemoteCursors] = useState(readRemoteCursorsVisible);
+    const toggleRemoteCursors = useCallback(() => {
+        const next = !showRemoteCursors;
+        persistRemoteCursorsVisible(next);
+        setShowRemoteCursors(next);
+    }, [showRemoteCursors]);
     const assetExportController = useRef<AbortController | null>(null);
     useEffect(() => {
         setAssetExportOpen(false);
@@ -2370,6 +2384,8 @@ function InfiniteCanvasPage() {
             syncError={collaboration.syncError}
             missingAssets={collaboration.missingAssets}
             assetReadiness={collaboration.assetReadiness}
+            showRemoteCursors={showRemoteCursors}
+            onToggleRemoteCursors={toggleRemoteCursors}
         />
     ) : null;
 
@@ -2506,6 +2522,7 @@ function InfiniteCanvasPage() {
                                             presence={collaboration.presence}
                                             nodes={nodes}
                                             viewport={viewport}
+                                            showRemoteCursors={showRemoteCursors}
                                             status={focusMode ? collaborationStatus : undefined}
                                         />
                                     ) : null}

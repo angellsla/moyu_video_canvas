@@ -14,10 +14,43 @@ import {
     readPortableSharedCanvasContent,
     readSharedCanvasContent,
     restoreLocalSharedCanvasContent,
+    retainUnresolvedSharedCanvasAssets,
     toPortableSharedCanvasContent,
     writeSharedCanvasContent,
     type SharedCanvasContent,
 } from "@/services/collaborative-canvas-document";
+
+test("editing and reordering nodes with pending files preserves shared asset hashes", () => {
+    const source = content();
+    source.nodes[0].type = "image";
+    source.nodes[0].metadata = { storageKey: "resource:image", content: "blob:preview" };
+    const baseline = toPortableSharedCanvasContent(source, () => "hash-image");
+    const local = restoreLocalSharedCanvasContent(baseline, () => undefined);
+    const current = structuredClone(local);
+    current.nodes[0].position.x = 700;
+    current.nodes.unshift({ ...content().nodes[0], id: "new-node" });
+    const next = retainUnresolvedSharedCanvasAssets(toPortableSharedCanvasContent(current, () => undefined), baseline, local, current);
+    expect(next.nodes[1]).toMatchObject({ position: { x: 700 }, metadata: { storageKey: { contentHash: "hash-image" }, content: { contentHash: "hash-image" } } });
+    expect(restoreLocalSharedCanvasContent(next, ({ field }) => field === "storageKey" ? "resource:downloaded" : "/api/resources/downloaded/file").nodes[1].metadata).toMatchObject({ storageKey: "resource:downloaded" });
+    current.nodes = [];
+    expect(retainUnresolvedSharedCanvasAssets(toPortableSharedCanvasContent(current, () => undefined), baseline, local, current).nodes).toEqual([]);
+});
+
+test("explicit media replacement and clearing are not undone by unavailable-asset preservation", () => {
+    const source = content();
+    source.nodes[0].type = "image";
+    source.nodes[0].metadata = { storageKey: "resource:old", content: "blob:preview" };
+    const baseline = toPortableSharedCanvasContent(source, () => "old-hash");
+    const local = restoreLocalSharedCanvasContent(baseline, () => undefined);
+    const current = structuredClone(local);
+    current.nodes[0].metadata!.content = "resource:new";
+    let next = retainUnresolvedSharedCanvasAssets(toPortableSharedCanvasContent(current, () => "new-hash"), baseline, local, current);
+    expect(next.nodes[0]).toMatchObject({ metadata: { content: { contentHash: "new-hash" } } });
+    expect((next.nodes[0] as { metadata: object }).metadata).not.toHaveProperty("storageKey");
+    current.nodes[0].metadata!.content = "";
+    next = retainUnresolvedSharedCanvasAssets(toPortableSharedCanvasContent(current, () => undefined), baseline, local, current);
+    expect(next.nodes[0]).toMatchObject({ metadata: { content: "" } });
+});
 
 test("local delta preserves a remote addition made after the local snapshot", () => {
     const doc = createCollaborativeCanvasDocument(content());
