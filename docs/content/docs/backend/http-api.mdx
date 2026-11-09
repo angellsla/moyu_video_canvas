@@ -21,6 +21,8 @@ Seedream 单次任务的实际输出数可以多于提交时的画布目标数�
 
 Wails 和浏览器开发模式共用同一套 `127.0.0.1` HTTP 合同。路由由 `backend/internal/handler/api.go` 统一注册，权威 OpenAPI 文件为 `backend/internal/handler/openapi.yaml`。
 
+桌面页面从 Wails origin 访问回环 API 时需要跨域预检。资源存在性检查使用 `Range: bytes=0-0` 与 `Cache-Control: no-cache`，桌面 CORS 显式允许这两个请求头及原有身份请求头。预检通过仅表示浏览器可发送请求，实际资源访问仍校验桌面身份和本地归属。
+
 ## 合同规则
 
 - 无登录、Cookie 会话或租户选择；后端从本地 workspace context 解析唯一 owner。

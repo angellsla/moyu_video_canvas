@@ -4,7 +4,7 @@ import { resourceFileUrl } from "@/services/api/resources";
 import { apiClient } from "@/services/api/request";
 import { openSharedCatalog } from "@/services/shared-catalog";
 import { getActiveUserScope } from "@/lib/user-scope";
-import { createSharedCanvasLocalAssetResolver, getSharedCanvasAssetReadiness, getSharedCanvasLocalAssetBindings, makePortableSharedCanvasContent, sharedCanvasPeerLocations, summarizeSharedCanvasAssetReadiness, validatedSharedCanvasLocalBindings } from "@/services/lan-collaboration-assets";
+import { createSharedCanvasLocalAssetResolver, getSharedCanvasAssetReadiness, getSharedCanvasLocalAssetBindings, makePortableSharedCanvasContent, prepareSharedCanvasLocalAssetValues, sharedCanvasPeerLocations, summarizeSharedCanvasAssetReadiness, validatedSharedCanvasLocalBindings } from "@/services/lan-collaboration-assets";
 import type { SharedCanvasContent } from "@/services/collaborative-canvas-document";
 
 async function withAssetAPI(run: (catalogId: string, calls: Array<{ url: string; data: unknown }>) => Promise<void>) {
@@ -159,6 +159,43 @@ test("shared asset pulls try every discovered address of trusted peers", () => {
         { peerId: "peer-b", address: "10.0.0.8", port: 8080 },
         { peerId: "peer-c", address: "192.168.2.8", port: 8080 },
     ]);
+});
+
+test("an existing asset probe does not prevent importing the next shared asset", async () => {
+    await withAssetAPI(async (id) => {
+        await makePortableSharedCanvasContent(id, mediaContent());
+        const catalog = await openSharedCatalog(id, { scope: getActiveUserScope() });
+        catalog.upsertEntry({ entryId: "second", contentHash: "hash-second", name: "second.jpg", mimeType: "image/jpeg", size: 8, createdBy: "peer", createdAt: new Date().toISOString() });
+        const originalRequest = apiClient.request;
+        const probes: string[] = [];
+        const imports: string[] = [];
+        apiClient.request = (async (config) => {
+            const url = config.url || "";
+            if (url.endsWith("/file")) {
+                expect(config.headers).toMatchObject({ Range: "bytes=0-0", "Cache-Control": "no-cache" });
+                expect(config.responseType).toBe("arraybuffer");
+                probes.push(url);
+                return { status: 206, headers: {}, data: new Uint8Array([1]).buffer };
+            }
+            let data: unknown;
+            if (url.endsWith("/updates") && config.method === "get") data = { updates: [], cursor: "", hasMore: false };
+            else if (url.endsWith("/peers")) data = { trusted: [{ peerId: "peer", address: "192.168.1.20", port: 12047 }], discovered: [] };
+            else if (url.endsWith("/import")) {
+                imports.push((config.data as { contentHash: string }).contentHash);
+                data = { resource: { id: "second" } };
+            } else return originalRequest(config);
+            return { status: 200, headers: {}, data: { code: 0, data, msg: "ok" } };
+        }) as typeof apiClient.request;
+        try {
+            const hashes = ["hash-original", "hash-second"];
+            expect(await prepareSharedCanvasLocalAssetValues(id, hashes)).toEqual({ "hash-original": "original", "hash-second": "second" });
+            const readiness = await getSharedCanvasAssetReadiness(id, hashes);
+            expect(readiness.local).toEqual({ mappedCount: 2, missingHashes: [] });
+            expect(imports).toEqual(["hash-second"]);
+            expect(probes).toContain("/resources/original/file");
+            expect(probes).toContain("/resources/second/file");
+        } finally { apiClient.request = originalRequest; }
+    });
 });
 
 test("deleted local resource bindings are not treated as ready", async () => {

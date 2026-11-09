@@ -4,6 +4,10 @@ All notable public changes to the desktop workspace are documented in this file.
 
 ## Unreleased
 
+## v1.0.11
+
+- 修复桌面协作画布素材同步被跨域预检拦截的问题：允许本机资源存在性检查使用的 `Cache-Control` 和 `Range` 请求头，避免已有素材的检查中断后续素材拉取与就绪状态更新；桌面身份与设备信任校验保持不变。
+
 ## v1.0.10
 
 - 修复协作画布上传素材的临时预览地址解析，优先使用持久资源共享；只有临时地址的素材先保存为本机资源，视频预览图与视频本体分别同步。
