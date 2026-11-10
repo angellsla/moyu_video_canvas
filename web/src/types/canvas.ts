@@ -8,6 +8,7 @@ import type { StyleExecutionPlan } from "@/lib/canvas/style-profile";
 import type { ArtCritiqueNodeState } from "@/lib/art-critique/contracts";
 import type { CameraControlOptions } from "@/lib/canvas/camera-prompt-library";
 import type { SrtEntry, SubtitleHighlight, SubtitleStyle } from "@/types/timeline";
+import type { MidjourneyImagineParams } from "@/lib/midjourney-imagine";
 
 export type Position = {
     x: number;
@@ -284,6 +285,7 @@ export type CanvasNodeMetadata = {
     seedreamOutputFormat?: string;
     seedreamOptimize?: string;
     seedreamWatermark?: string;
+    midjourneyParams?: MidjourneyImagineParams;
     count?: number;
     textCount?: number;
     seconds?: string;
