@@ -13,6 +13,7 @@ import { useUserStore } from "@/stores/use-user-store";
 import type { CapabilitySpec } from "@/services/api/logical-models";
 import { seedancePortraitLabel, seedancePortraitModel, type VideoPriceQuote } from "@/lib/seedance-portrait";
 import { knownModelCapability } from "@/lib/model-name-capabilities";
+import type { MidjourneyImagineParams } from "@/lib/midjourney-imagine";
 
 export type ApiCallFormat = "openai" | "gemini" | "claude";
 export type ChannelInterfaceType = ModelProtocol;
@@ -435,6 +436,7 @@ export type AiConfig = {
     seedreamOutputFormat?: string;
     seedreamOptimize?: string;
     seedreamWatermark?: string;
+    midjourneyParams?: MidjourneyImagineParams;
     count: string;
     canvasImageCount: string;
 };

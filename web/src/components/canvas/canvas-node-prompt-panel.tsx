@@ -14,6 +14,7 @@ import { useActiveTheme } from "@/stores/canvas/use-canvas-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { CanvasCameraControlPopover } from "./canvas-camera-control-popover";
 import { CanvasImageSettingsPopover } from "./canvas-image-settings-popover";
+import { isMidjourneyImagineModel, type MidjourneyImagineParams } from "@/lib/midjourney-imagine";
 import { CanvasAudioSettingsPopover, type CanvasAudioSettingKey } from "./canvas-audio-settings-popover";
 import { CanvasResourceMentionTextarea } from "./canvas-resource-mention-textarea";
 import { CanvasPromptFontControl } from "./canvas-prompt-font-control";
@@ -432,7 +433,12 @@ export function CanvasNodePromptPanel({ projectId, node, isRunning, onPromptChan
                                 placement={expanded ? "topRight" : "topLeft"}
                                 buttonClassName="canvas-node-composer-settings-trigger [&>span]:min-w-0 [&_.lucide]:!size-3"
                                 onConfigChange={(key, value) => {
-                                    rememberImageSettings(imagePreferencePatch(key, value));
+                                    if (key === "midjourneyParams" && typeof value !== "string") {
+                                        onConfigChange(node.id, { midjourneyParams: value as MidjourneyImagineParams });
+                                        return;
+                                    }
+                                    if (typeof value !== "string") return;
+                                    if (!isMidjourneyImagineModel(config.model || config.imageModel)) rememberImageSettings(imagePreferencePatch(key, value));
                                     onConfigChange(node.id, key === "count" ? { count: Number(value) || 1 } : { [key]: value });
                                 }}
                                 onMissingConfig={() => navigateToSettings({ continueCreation: true })}

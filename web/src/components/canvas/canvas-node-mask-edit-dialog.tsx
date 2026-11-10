@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, ty
 import { Brush, Eraser, LoaderCircle, RotateCcw, Settings2, WandSparkles, X } from "lucide-react";
 
 import { ImageSettingsPanel } from "@/components/image-settings-panel";
+import { MidjourneyImagineSettings } from "@/components/midjourney-imagine-settings";
+import { isMidjourneyImagineModel, type MidjourneyImagineParams } from "@/lib/midjourney-imagine";
 import { ModelPicker } from "@/components/model-picker";
 import { Tooltip } from "@/components/ui/base/tooltip";
 import { canvasThemes } from "@/lib/canvas-theme";
@@ -12,7 +14,7 @@ import type { AiConfig } from "@/stores/use-config-store";
 export type CanvasImageMaskEditPayload = {
     prompt: string;
     maskDataUrl: string;
-    generationConfig?: Partial<Pick<AiConfig, "model" | "imageModel" | "size" | "quality" | "count" | "transparentBackground">>;
+    generationConfig?: Partial<Pick<AiConfig, "model" | "imageModel" | "size" | "quality" | "count" | "transparentBackground" | "midjourneyParams">>;
 };
 
 type DrawMode = "paint" | "erase";
@@ -78,7 +80,7 @@ export function CanvasImageMaskEditor({ imageDimensions, scale, config, onCancel
         if (isSubmitting) return;
         setIsSubmitting(true);
         try {
-            await onConfirm({ prompt: nextPrompt, maskDataUrl: buildEditMask(canvas), generationConfig: { model: generationConfig.model, imageModel: generationConfig.imageModel, size: generationConfig.size, quality: generationConfig.quality, count: generationConfig.count, transparentBackground: generationConfig.transparentBackground } });
+            await onConfirm({ prompt: nextPrompt, maskDataUrl: buildEditMask(canvas), generationConfig: { model: generationConfig.model, imageModel: generationConfig.imageModel, size: generationConfig.size, quality: generationConfig.quality, count: generationConfig.count, transparentBackground: generationConfig.transparentBackground, midjourneyParams: generationConfig.midjourneyParams } });
         } finally { setIsSubmitting(false); }
     };
     const inverseScale = 1 / Math.max(scale, 0.01);
@@ -104,9 +106,13 @@ export function CanvasImageMaskEditor({ imageDimensions, scale, config, onCancel
             </div>
             <div className="relative">
                 <button type="button" aria-label="局部重绘设置" title="局部重绘设置" onClick={() => setSettingsOpen((value) => !value)} className={`grid size-9 place-items-center rounded-xl transition ${settingsOpen ? "bg-white/16 text-white" : "text-white/72 hover:bg-white/10 hover:text-white"}`}><Settings2 className="size-4" /></button>
-                {settingsOpen ? <div className="absolute bottom-11 right-0 w-80 space-y-3 rounded-2xl border border-white/10 bg-[#242424] p-3 text-white shadow-2xl" onPointerDown={(event) => event.stopPropagation()}>
+                {settingsOpen ? <div className="absolute bottom-11 right-0 w-80 max-w-[min(90vw,360px)] space-y-3 overflow-y-auto rounded-2xl border border-white/10 bg-[#242424] p-3 text-white shadow-2xl" style={{ maxHeight: "min(70vh, 560px)" }} onPointerDown={(event) => event.stopPropagation()}>
                     <ModelPicker config={generationConfig} value={generationConfig.imageModel || generationConfig.model} capability="image" fullWidth onChange={(model) => setGenerationConfig((current) => ({ ...current, model, imageModel: model, ...defaultImageParamsForModel(current, model) }))} />
-                    <ImageSettingsPanel config={generationConfig} showTitle={false} showCount={false} className="space-y-3" theme={theme} onConfigChange={(key, value) => setGenerationConfig((current) => ({ ...current, [key]: value }))} />
+                    {isMidjourneyImagineModel(generationConfig.model || generationConfig.imageModel) ? (
+                        <MidjourneyImagineSettings config={generationConfig} theme={theme} onConfigChange={(key, value) => setGenerationConfig((current) => ({ ...current, [key]: value }) as AiConfig)} />
+                    ) : (
+                        <ImageSettingsPanel config={generationConfig} showTitle={false} showCount={false} className="space-y-3" theme={theme} onConfigChange={(key, value) => setGenerationConfig((current) => ({ ...current, [key]: value }))} />
+                    )}
                 </div> : null}
             </div>
             <button type="button" aria-label={isSubmitting ? "正在修改" : "AI 修改"} title={isSubmitting ? "正在修改" : "AI 修改"} disabled={isSubmitting} onClick={() => void submit()} className="grid size-9 place-items-center rounded-xl bg-white text-neutral-900 transition hover:bg-white/90 disabled:cursor-wait disabled:opacity-60">{isSubmitting ? <LoaderCircle className="size-4 animate-spin text-neutral-900" /> : <WandSparkles className="size-4 text-neutral-900" />}</button>

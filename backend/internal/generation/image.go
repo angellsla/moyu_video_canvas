@@ -12,7 +12,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -140,8 +139,6 @@ func RunImageTask(ctx context.Context, input Input) (map[string]interface{}, err
 	return result, nil
 }
 
-var midjourneyAspectParameter = regexp.MustCompile(`(?i)(?:^|\s)--(?:ar|aspect)(?:\s|=|$)`)
-
 func runMidjourneyImagineImageTask(ctx context.Context, input Input) (map[string]interface{}, error) {
 	prepared, err := prepareMidjourneyImagineInput(ctx, input)
 	if err != nil {
@@ -193,14 +190,9 @@ func prepareMidjourneyImagineInput(ctx context.Context, input Input) (Input, err
 	if prompt == "" {
 		return Input{}, errors.New("Midjourney Imagine 提示词不能为空")
 	}
-	if !midjourneyAspectParameter.MatchString(prompt) {
-		ratio, err := midjourneyAspectRatio(input.Config.Size)
-		if err != nil {
-			return Input{}, err
-		}
-		if ratio != "" {
-			prompt += " --ar " + ratio
-		}
+	prompt, err := normalizeMidjourneyPrompt(prompt, input.Config.Size, input.Config.MidjourneyParams)
+	if err != nil {
+		return Input{}, err
 	}
 	input.Prompt = prompt
 	input.Config.SystemPrompt = ""
@@ -226,6 +218,153 @@ func prepareMidjourneyImagineInput(ctx context.Context, input Input) (Input, err
 	return input, nil
 }
 
+func midjourneyImagineParameterSuffix(params MidjourneyImagineParams) (string, error) {
+	version := strings.TrimSpace(params.Version)
+	niji := strings.TrimSpace(params.Niji)
+	if version != "" && !oneOf(version, "1", "2", "3", "4", "5", "6", "7", "8.1", "8.2") {
+		return "", fmt.Errorf("Midjourney 模型版本无效：%s", version)
+	}
+	if niji != "" && !oneOf(niji, "6", "7") {
+		return "", fmt.Errorf("Midjourney Niji 版本无效：%s", niji)
+	}
+	if niji != "" && version != "" {
+		return "", errors.New("Midjourney --niji 与 --v 不能同时使用")
+	}
+	if params.Stylize != nil && (*params.Stylize < 0 || *params.Stylize > 1000) {
+		return "", errors.New("Midjourney 风格化范围为 0 到 1000")
+	}
+	if params.Chaos != nil && (*params.Chaos < 0 || *params.Chaos > 100) {
+		return "", errors.New("Midjourney 混乱度范围为 0 到 100")
+	}
+	if params.Weird != nil && (*params.Weird < 0 || *params.Weird > 3000) {
+		return "", errors.New("Midjourney 怪异度范围为 0 到 3000")
+	}
+	if params.Exp != nil && (*params.Exp < 0 || *params.Exp > 100) {
+		return "", errors.New("Midjourney 实验性参数范围为 0 到 100")
+	}
+	if params.Repeat != nil && *params.Repeat < 1 {
+		return "", errors.New("Midjourney 重复次数必须大于 0")
+	}
+	if params.Stop != nil && (*params.Stop < 0 || *params.Stop > 100) {
+		return "", errors.New("Midjourney 停止百分比范围为 0 到 100")
+	}
+	if params.ImageWeight != nil && (*params.ImageWeight < 0 || *params.ImageWeight > 3) {
+		return "", errors.New("Midjourney 图片权重范围为 0 到 3")
+	}
+	if params.Sw != nil && (*params.Sw < 0 || *params.Sw > 1000) {
+		return "", errors.New("Midjourney 风格参考权重范围为 0 到 1000")
+	}
+	if params.Ow != nil && (*params.Ow < 0 || *params.Ow > 1000) {
+		return "", errors.New("Midjourney 物体权重范围为 0 到 1000")
+	}
+	if params.Cw != nil && (*params.Cw < 0 || *params.Cw > 100) {
+		return "", errors.New("Midjourney 角色权重范围为 0 到 100")
+	}
+	if strings.TrimSpace(params.Profile) != "" && (params.Sw != nil || strings.TrimSpace(params.Sv) != "") {
+		return "", errors.New("Midjourney Moodboard 不能与 --sw 或 --sv 同时使用")
+	}
+	if params.SDHD != "" && !oneOf(params.SDHD, "sd", "hd") {
+		return "", errors.New("Midjourney 输出档位仅支持 SD 或 HD")
+	}
+	if params.Quality != "" && !oneOf(params.Quality, "1", "2", "4") {
+		return "", errors.New("Midjourney 质量仅支持 1、2 或 4")
+	}
+	if params.SpeedMode != "" && !oneOf(params.SpeedMode, "fast", "relax", "turbo") {
+		return "", errors.New("Midjourney 速度模式无效")
+	}
+	if niji != "" && (params.Draft || params.SDHD != "" || params.Oref != "" || params.Cref != "") {
+		return "", errors.New("Midjourney Niji 不支持 V 系列专属输出或参考参数")
+	}
+
+	flags := make([]string, 0, 40)
+	add := func(flag string, value string) {
+		if value = strings.TrimSpace(value); value != "" {
+			flags = append(flags, flag, value)
+		}
+	}
+	if niji != "" {
+		add("--niji", niji)
+	} else {
+		add("--v", version)
+	}
+	addInt := func(flag string, value *int) {
+		if value != nil {
+			add(flag, strconv.Itoa(*value))
+		}
+	}
+	addInt("--stylize", params.Stylize)
+	addInt("--chaos", params.Chaos)
+	addInt("--weird", params.Weird)
+	addInt("--exp", params.Exp)
+	add("--no", params.No)
+	if params.Seed != nil {
+		add("--seed", strconv.FormatUint(uint64(*params.Seed), 10))
+	}
+	if params.Raw {
+		flags = append(flags, "--style", "raw")
+	}
+	if params.Tile {
+		flags = append(flags, "--tile")
+	}
+	addInt("--repeat", params.Repeat)
+	addInt("--stop", params.Stop)
+	version8 := strings.HasPrefix(version, "8.")
+	if version8 && params.Quality != "" {
+		return "", errors.New("Midjourney V8.x 请使用 SD/HD 输出档位，不支持 --q")
+	}
+	if !version8 && params.SDHD != "" {
+		return "", errors.New("Midjourney SD/HD 输出仅支持 V8.1 或 V8.2")
+	}
+	if params.SDHD != "" {
+		flags = append(flags, "--"+params.SDHD)
+	}
+	if params.Quality != "" && (niji != "" || (version != "" && version != "6" && version != "7")) {
+		return "", errors.New("Midjourney --q 仅支持 V6 或 V7")
+	}
+	if params.Quality != "" {
+		add("--q", params.Quality)
+	}
+	if params.Draft {
+		if version != "" && version != "7" {
+			return "", errors.New("Midjourney 草稿模式仅支持 V7")
+		}
+		flags = append(flags, "--draft")
+	}
+	if params.SpeedMode == "turbo" && version8 {
+		return "", errors.New("Midjourney V8.x 不支持 Turbo 模式")
+	}
+	if params.SpeedMode != "" {
+		flags = append(flags, "--"+params.SpeedMode)
+	}
+	if params.ImageWeight != nil {
+		add("--iw", strconv.FormatFloat(*params.ImageWeight, 'f', -1, 64))
+	}
+	add("--sref", params.Sref)
+	addInt("--sw", params.Sw)
+	add("--sv", params.Sv)
+	add("--profile", params.Profile)
+	if params.Oref != "" && version != "" && version != "7" {
+		return "", errors.New("Midjourney --oref 仅支持 V7")
+	}
+	add("--oref", params.Oref)
+	addInt("--ow", params.Ow)
+	if params.Cref != "" && version != "" && version != "6" {
+		return "", errors.New("Midjourney --cref 仅支持 V6")
+	}
+	add("--cref", params.Cref)
+	addInt("--cw", params.Cw)
+	return strings.Join(flags, " "), nil
+}
+
+func oneOf(value string, allowed ...string) bool {
+	for _, candidate := range allowed {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
+}
+
 func midjourneyAspectRatio(value string) (string, error) {
 	value = strings.ToLower(strings.TrimSpace(strings.ReplaceAll(value, "×", "x")))
 	if value == "" || value == "auto" {
@@ -244,11 +383,7 @@ func midjourneyAspectRatio(value string) (string, error) {
 	if widthErr != nil || heightErr != nil || width <= 0 || height <= 0 {
 		return "", fmt.Errorf("Midjourney 画幅比例无效：%s", value)
 	}
-	a, b := width, height
-	for b != 0 {
-		a, b = b, a%b
-	}
-	return fmt.Sprintf("%d:%d", width/a, height/a), nil
+	return fmt.Sprintf("%d:%d", width, height), nil
 }
 
 func RunGeminiImageTask(ctx context.Context, input Input) (map[string]interface{}, error) {

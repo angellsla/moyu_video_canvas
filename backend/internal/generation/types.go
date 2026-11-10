@@ -96,6 +96,7 @@ type Config struct {
 	SeedreamOutputFormat     string                    `json:"seedreamOutputFormat,omitempty"`
 	SeedreamOptimize         string                    `json:"seedreamOptimize,omitempty"`
 	SeedreamWatermark        string                    `json:"seedreamWatermark,omitempty"`
+	MidjourneyParams         MidjourneyImagineParams   `json:"midjourneyParams,omitempty"`
 	Count                    string                    `json:"count"`
 	VideoSeconds             string                    `json:"videoSeconds"`
 	VQuality                 string                    `json:"vquality"`
@@ -117,6 +118,34 @@ type Config struct {
 	RunningHubUseWallet      bool                      `json:"runningHubUseWallet"`
 	RunningHubWalletKey      string                    `json:"runningHubWalletApiKey"`
 	RunningHubUploadKey      string                    `json:"runningHubUploadApiKey"`
+}
+
+type MidjourneyImagineParams struct {
+	Stylize     *int     `json:"stylize,omitempty"`
+	Chaos       *int     `json:"chaos,omitempty"`
+	Weird       *int     `json:"weird,omitempty"`
+	Exp         *int     `json:"exp,omitempty"`
+	No          string   `json:"no,omitempty"`
+	Seed        *uint32  `json:"seed,omitempty"`
+	Raw         bool     `json:"raw,omitempty"`
+	Tile        bool     `json:"tile,omitempty"`
+	Repeat      *int     `json:"repeat,omitempty"`
+	Stop        *int     `json:"stop,omitempty"`
+	Version     string   `json:"version,omitempty"`
+	Niji        string   `json:"niji,omitempty"`
+	SDHD        string   `json:"sdHd,omitempty"`
+	Quality     string   `json:"quality,omitempty"`
+	Draft       bool     `json:"draft,omitempty"`
+	SpeedMode   string   `json:"speedMode,omitempty"`
+	ImageWeight *float64 `json:"imageWeight,omitempty"`
+	Sref        string   `json:"sref,omitempty"`
+	Sw          *int     `json:"sw,omitempty"`
+	Sv          string   `json:"sv,omitempty"`
+	Profile     string   `json:"profile,omitempty"`
+	Oref        string   `json:"oref,omitempty"`
+	Ow          *int     `json:"ow,omitempty"`
+	Cref        string   `json:"cref,omitempty"`
+	Cw          *int     `json:"cw,omitempty"`
 }
 
 type Media struct {

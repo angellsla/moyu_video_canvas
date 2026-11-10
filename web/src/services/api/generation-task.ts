@@ -484,6 +484,7 @@ export function backendProviderConfig(config: AiConfig, mode: BackendGenerationM
         seedreamOutputFormat: config.seedreamOutputFormat,
         seedreamOptimize: config.seedreamOptimize,
         seedreamWatermark: config.seedreamWatermark,
+        midjourneyParams: config.midjourneyParams,
         count: config.count,
         videoSeconds: config.videoSeconds,
         vquality: config.vquality,

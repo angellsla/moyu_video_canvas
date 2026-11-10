@@ -4,6 +4,10 @@ All notable public changes to the desktop workspace are documented in this file.
 
 ## Unreleased
 
+## v1.0.12
+
+- 为 `mj_imagine` 提供独立、可滚动的参数配置；提交前将提示词中的 Midjourney 参数提取并归一化到末尾，合并画幅与面板参数，校验参数值及互斥项，冲突时明确提示；保持现有图片生成端点和请求体结构。
+
 ## v1.0.11
 
 - 修复桌面协作画布素材同步被跨域预检拦截的问题：允许本机资源存在性检查使用的 `Cache-Control` 和 `Range` 请求头，避免已有素材的检查中断后续素材拉取与就绪状态更新；桌面身份与设备信任校验保持不变。
