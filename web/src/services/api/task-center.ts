@@ -4,6 +4,7 @@ import { assertUserScope, captureUserScope, isUserScopeAbandonedError, type Capt
 import { ApiError, http, apiBaseURL, type BackendEnvelope, type HttpRequestConfig } from "@/services/api/request";
 import { consumeTaskTextStream, createTaskTextStreamParser, type TaskTextStreamEvent } from "@/services/api/task-text-stream";
 import { getDiagnosticTraceId, recordDiagnosticEvent } from "@/services/diagnostics/client-diagnostics";
+import { recordTaskLifecycleTransition } from "@/services/diagnostics/task-lifecycle";
 import { publishGenerationDeliveryProgress } from "@/stores/use-generation-delivery-progress";
 import { beginTaskReferenceObservation, publishTaskReferenceProgress } from "@/services/task-reference-progress";
 
@@ -418,6 +419,7 @@ export async function waitForGenerationTask(id: string, options?: WaitForGenerat
     const startedAt = Date.now();
     const intervalMs = options?.intervalMs || 2000;
     let lastTask = options?.initialTask;
+    let lastObservedStatus = options?.initialTask?.status;
     let lastQueryError: unknown;
     let consecutiveFailures = 0;
     // Only the progress this waiter published is cleared on exit, so a second
@@ -434,6 +436,10 @@ export async function waitForGenerationTask(id: string, options?: WaitForGenerat
                 lastQueryError = undefined;
                 consecutiveFailures = 0;
                 options?.onTaskUpdate?.(task);
+                if (task.status !== lastObservedStatus) {
+                    recordTaskLifecycleTransition(task, lastObservedStatus);
+                    lastObservedStatus = task.status;
+                }
             } catch (error) {
                 if (isUserScopeAbandonedError(error)) throw error;
                 lastQueryError = error;

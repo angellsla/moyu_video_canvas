@@ -15,10 +15,59 @@ import {
     readSharedCanvasContent,
     restoreLocalSharedCanvasContent,
     retainUnresolvedSharedCanvasAssets,
+    retainLocalSharedCanvasAssets,
+    restoreCollaborativeCanvasVersion,
     toPortableSharedCanvasContent,
     writeSharedCanvasContent,
     type SharedCanvasContent,
 } from "@/services/collaborative-canvas-document";
+
+test("upload status stays local and legacy upload flags cannot hide a ready image", () => {
+    const local = content();
+    local.nodes[0].type = "image";
+    local.nodes[0].metadata = { content: "blob:pending", fileUpload: "uploading", fileUploadProgress: 30 };
+    const portable = toPortableSharedCanvasContent(local, () => undefined);
+    expect(portable.nodes[0]).toMatchObject({ metadata: {} });
+    expect(JSON.stringify(portable)).not.toContain("fileUpload");
+    const projected = restoreLocalSharedCanvasContent(portable, () => undefined);
+    expect(retainLocalSharedCanvasAssets(projected, portable, local, portable).nodes[0].metadata).toEqual(local.nodes[0].metadata);
+    const legacy = toPortableSharedCanvasContent(local, () => "hash");
+    (legacy.nodes[0] as { metadata: object }).metadata = { ...(legacy.nodes[0] as { metadata: object }).metadata, fileUpload: "uploading", fileUploadProgress: 30 };
+    expect(restoreLocalSharedCanvasContent(legacy, () => "/api/resources/local/file").nodes[0].metadata).toEqual({ content: "/api/resources/local/file" });
+});
+
+test("local pending media follows node IDs without undoing remote replacements or deletions", () => {
+    const local = content();
+    local.nodes[0].type = "image";
+    local.nodes[0].metadata = { content: "blob:pending", storageKey: "resource:new" };
+    const base = toPortableSharedCanvasContent(local, () => undefined);
+    const reordered = structuredClone(base);
+    reordered.nodes.unshift({ id: "remote", type: "text", title: "Remote" });
+    const merged = retainLocalSharedCanvasAssets(restoreLocalSharedCanvasContent(reordered, () => undefined), base, local, reordered);
+    expect(merged.nodes[1].metadata).toEqual(local.nodes[0].metadata);
+    expect(merged.nodes[0].metadata).toBeUndefined();
+    const replaced = toPortableSharedCanvasContent(local, () => "remote-hash");
+    expect(retainLocalSharedCanvasAssets(restoreLocalSharedCanvasContent(replaced, () => "remote-file"), base, local, replaced).nodes[0].metadata?.content).toBe("remote-file");
+    expect(retainLocalSharedCanvasAssets({ ...local, nodes: [] }, base, local, { ...base, nodes: [] }).nodes).toEqual([]);
+});
+
+test("explicit history restore revives deleted nodes and converges as a new Yjs update", () => {
+    const doc = createCollaborativeCanvasDocument(content());
+    const history = readPortableSharedCanvasContent(doc);
+    const peer = createCollaborativeCanvasDocument();
+    applyCollaborativeCanvasUpdate(peer, encodeCollaborativeCanvasState(doc));
+    const id = content().nodes[0].id;
+    deleteCollaborativeCanvasNode(doc, id);
+    applyCollaborativeCanvasUpdate(peer, encodeCollaborativeCanvasState(doc));
+    expect(readSharedCanvasContent(peer).nodes).toEqual([]);
+    restoreCollaborativeCanvasVersion(doc, history);
+    applyCollaborativeCanvasUpdate(peer, encodeCollaborativeCanvasState(doc));
+    expect(readPortableSharedCanvasContent(peer)).toEqual(history);
+    patchCollaborativeCanvasNode(peer, id, { title: "Editable again" });
+    applyCollaborativeCanvasUpdate(doc, encodeCollaborativeCanvasState(peer));
+    expect(readSharedCanvasContent(doc).nodes[0].title).toBe("Editable again");
+    doc.destroy(); peer.destroy();
+});
 
 test("editing and reordering nodes with pending files preserves shared asset hashes", () => {
     const source = content();

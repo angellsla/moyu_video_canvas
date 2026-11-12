@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { App, Button, Input, InputNumber, Select, Switch, Tooltip } from "antd";
-import { Plus, RefreshCw, Save, Unlink, UserRoundPlus } from "lucide-react";
+import copyToClipboard from "copy-to-clipboard";
+import { Copy, Plus, RefreshCw, Save, Unlink, UserRoundPlus } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/workspace-page";
 import { localForageStorageForScope } from "@/lib/localforage-storage";
@@ -161,6 +162,17 @@ export function LanSharingPane() {
     const catalogIdsKeyRef = useRef("");
     const mountedRef = useRef(false);
     const bindingsRef = useRef<ResourceBindings>({});
+    const pairingCodeIsCopyable = Boolean(status?.pairingCode) && (!status?.pairingCodeExpiresAt || !Number.isFinite(Date.parse(status.pairingCodeExpiresAt)) || Date.parse(status.pairingCodeExpiresAt) > Date.now());
+
+    const copyPairingCode = useCallback(async () => {
+        if (!status?.pairingCode || !pairingCodeIsCopyable) return;
+        try {
+            if (await copyToClipboard(status.pairingCode)) message.success("配对码已复制");
+            else message.error("复制失败，请手动选择配对码");
+        } catch {
+            message.error("复制失败，请手动选择配对码");
+        }
+    }, [message, pairingCodeIsCopyable, status?.pairingCode]);
 
     scopeRef.current = scope;
 
@@ -591,6 +603,9 @@ export function LanSharingPane() {
                 size: entry.size,
             });
             await persistLocalResourceBinding(catalogId, entry.contentHash, result.resource.id);
+            const catalog = await connectCatalog(catalogId);
+            catalog.upsertEntry(result.asset);
+            await catalog.flush();
             await refreshAssetStatuses([catalogId]);
             setResources((current) => [result.resource, ...current.filter((resource) => resource.id !== result.resource.id)]);
             message.success("資產已匯入本機資源");
@@ -674,6 +689,9 @@ export function LanSharingPane() {
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-[var(--r-sm)] border border-border px-3 py-2">
                         <span className="text-sm text-foreground/65">配对码</span>
                         <code className="select-all text-base font-semibold text-foreground">{status.pairingCode || "已过期"}</code>
+                        <Button size="small" icon={<Copy className="size-3.5" />} onClick={copyPairingCode} disabled={!pairingCodeIsCopyable || Boolean(busy)}>
+                            复制配对码
+                        </Button>
                         {pairingExpiry(status.pairingCodeExpiresAt) ? <span className="text-sm text-foreground/55">{pairingExpiry(status.pairingCodeExpiresAt)}</span> : null}
                         <Button size="small" icon={<RefreshCw className="size-3.5" />} onClick={() => void renewPairingCode()} loading={busy === "pairing-code"} disabled={Boolean(busy)}>
                             更新配对码

@@ -592,6 +592,27 @@ export function defaultModelCapabilityConfig(protocol?: ModelProtocol, model = "
         video.defaultResolution = "480p";
         video.operations = ["text_to_video", "image_to_video", "reference_to_video"];
     }
+    if (protocol === "sistinelove-seedance-video") {
+        const is25 = isSeedance25Model(model);
+        video.references.maxImages = is25 ? 30 : 9;
+        video.references.maxVideos = is25 ? 10 : 3;
+        video.references.maxAudios = is25 ? 10 : 3;
+        video.references.maxVideoBytes = 200 * 1024 * 1024;
+        video.references.maxAudioBytes = 15 * 1024 * 1024;
+        video.references.maxVideoDurationSeconds = is25 ? 30 : 15;
+        video.references.maxAudioDurationSeconds = is25 ? 30 : 15;
+        video.references.minVideoDurationSeconds = 2;
+        video.references.minAudioDurationSeconds = 2;
+        video.generateAudio = { supported: true, default: true };
+        video.watermark = { supported: true, default: false };
+        video.operations.push("reference_to_video");
+        if (is25) {
+            video.duration = { ...video.duration, max: 30 };
+            video.resolutions = ["480p", "720p"];
+        } else {
+            video.resolutions = ["480p", "720p", "1080p"];
+        }
+    }
     if (protocol === "volcengine-jimeng-video") {
         video.duration = { selection: "enum", values: [5, 10], default: 5 };
         video.resolutions = ["720p"];

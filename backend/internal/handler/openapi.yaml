@@ -30,6 +30,47 @@ tags:
   - name: creation-conversations
   - name: lan-sharing
 paths:
+  /runtime-logs/frontend:
+    post:
+      tags: [meta]
+      summary: 写入受信任桌面界面的运行日志
+      description: 仅桌面进程开放；要求桌面启动令牌、UI 引导令牌和回环连接。每批最多 100 条、请求体最多 256 KiB；日志内容经本地脱敏后写入 frontend-YYYY-MM-DD.log，保留 30 天。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entries]
+              properties:
+                entries:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items:
+                    type: object
+                    required: [level, message]
+                    properties:
+                      timestamp: { type: string, format: date-time }
+                      level: { type: string, enum: [info, warning, error] }
+                      category: { type: string, maxLength: 120 }
+                      code: { type: string, maxLength: 120 }
+                      message: { type: string, maxLength: 2000 }
+                      stack: { type: string, maxLength: 4000 }
+                      taskId: { type: string, maxLength: 120 }
+                      canvasId: { type: string, maxLength: 120 }
+                      nodeId: { type: string, maxLength: 120 }
+                      requestId: { type: string, maxLength: 120 }
+                      traceId: { type: string, maxLength: 120 }
+                      launchId: { type: string, maxLength: 120 }
+                      reason: { type: string, maxLength: 120 }
+                      route: { type: string, maxLength: 300 }
+                      durationMs: { type: integer, minimum: 0 }
+                      httpStatus: { type: integer, minimum: 0, maximum: 599 }
+      responses:
+        "200": { description: 接收的日志条数 }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { description: 仅接受受信任的桌面界面写入 }
   /lan-sharing/status:
     get:
       tags: [lan-sharing]
@@ -295,7 +336,10 @@ paths:
     get:
       tags: [lan-sharing]
       summary: 打开协作画布本地实时流
-      description: 同源 WebSocket，使用一次性 ticket 查询参数；update 帧持久化后推送，presence 帧仅临时转发。
+      description: >-
+        同源 WebSocket，使用一次性 ticket 查询参数；update 帧持久化后推送，presence 帧仅临时转发。
+        素材清单新增更新持久化后，向关联画布推送 {type:"asset-catalog",canvasId,catalogId} 通知，
+        客户端立即补读清单并拉取缺失文件；通知本身不含文件或资源路径，断线仍以持久日志和重试队列补齐。
       parameters:
         - in: path
           name: canvasId
@@ -391,7 +435,12 @@ paths:
                 mimeType: { type: string, maxLength: 120 }
                 size: { type: integer, minimum: 1 }
       responses:
-        "200": { description: 信封 data.resource 为接收端自己的本地资源记录 }
+        "200":
+          description: >-
+            信封 data.resource 为接收端自己的本地资源记录，data.asset 为已验证的本机清单声明
+            （entryId、contentHash、name、mimeType、size、createdBy、createdAt 及媒体属性）。
+            createdBy 为接收设备指纹；entryId 由清单、接收设备和内容哈希确定，重复导入保持稳定。
+            客户端将 asset 写入 Yjs 并持久化待发更新，无需再次调用资产登记接口计算哈希。
         "400": { description: 资产元数据无效 }
         "403": { description: peer 未建立信任 }
         "404": { description: 清单或 peer 侧资产不存在 }

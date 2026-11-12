@@ -148,7 +148,7 @@ func (a *DesktopApp) MigrateStorage(target string) (desktopstorage.Usage, error)
 		if closing {
 			return desktopstorage.Usage{}, cause
 		}
-		old, openErr := openDesktopRuntime(context.Background(), source)
+		old, openErr := openDesktopRuntime(context.Background(), source, a.runtimeLogger)
 		if openErr == nil {
 			a.installStorageRuntime(source, old)
 			return desktopstorage.Usage{}, fmt.Errorf("迁移未完成，已恢复原工作区，存储目录未更改。请查看错误详情\n\n%w", cause)
@@ -194,7 +194,7 @@ func (a *DesktopApp) MigrateStorage(target string) (desktopstorage.Usage, error)
 	}
 	progress.Detail = "正在打开新目录并恢复工作区"
 	a.setMigrationProgress(progress)
-	next, err := openDesktopRuntime(ctx, target)
+	next, err := openDesktopRuntime(ctx, target, a.runtimeLogger)
 	if err != nil {
 		return restore(fmt.Errorf("新目录无法打开，继续使用原目录: %w", err))
 	}

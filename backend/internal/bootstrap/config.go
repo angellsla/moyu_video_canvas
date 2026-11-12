@@ -3,6 +3,8 @@ package bootstrap
 import (
 	"time"
 
+	"infinite-canvas/backend/internal/runtimelog"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -27,6 +29,7 @@ type Config struct {
 	AutoMigrate      bool
 	ShutdownTimeout  time.Duration
 	RouterMiddleware []gin.HandlerFunc
+	RuntimeLogger    *runtimelog.Logger
 }
 
 func (c Config) withDefaults() Config {

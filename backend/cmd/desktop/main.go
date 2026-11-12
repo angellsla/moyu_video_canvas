@@ -10,6 +10,7 @@ import (
 
 	"infinite-canvas/backend/internal/desktopstorage"
 	"infinite-canvas/backend/internal/desktopupdate"
+	"infinite-canvas/backend/internal/runtimelog"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -35,10 +36,28 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	app := newDesktopApp(dataDir)
+	runtimeLogger, err := runtimelog.OpenProgram()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Could not open program Logs directory; using desktop data directory:", err)
+		runtimeLogger, err = runtimelog.Open(filepath.Join(dataDir, "Logs"))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Could not initialize runtime logs:", err)
+			os.Exit(1)
+		}
+		runtimeLogger.Backend(runtimelog.Entry{Level: "warning", Category: "runtime", Code: "log_directory_fallback", Message: "Program directory is not writable; Logs are stored in the desktop data directory"})
+	}
+	restoreLog := runtimeLogger.RedirectStandardLog()
+	runtimeLogger.Backend(runtimelog.Entry{Level: "info", Category: "runtime", Code: "application_starting", Message: "Desktop application starting"})
+	app := newDesktopApp(dataDir, runtimeLogger)
 	err = runDesktopApp(app, wails.Run)
 	if err != nil {
-		log.Fatal(err)
+		runtimeLogger.Backend(runtimelog.Entry{Level: "error", Category: "runtime", Code: "application_exit_error", Message: err.Error()})
+		fmt.Fprintln(os.Stderr, err)
+	}
+	restoreLog()
+	runtimeLogger.Close()
+	if err != nil {
+		os.Exit(1)
 	}
 }
 

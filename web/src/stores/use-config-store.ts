@@ -13,6 +13,7 @@ import { useUserStore } from "@/stores/use-user-store";
 import type { CapabilitySpec } from "@/services/api/logical-models";
 import { seedancePortraitLabel, seedancePortraitModel, type VideoPriceQuote } from "@/lib/seedance-portrait";
 import { knownModelCapability } from "@/lib/model-name-capabilities";
+import { sistineloveSeedanceProtocol } from "@/lib/sistinelove-video";
 import type { MidjourneyImagineParams } from "@/lib/midjourney-imagine";
 
 export type ApiCallFormat = "openai" | "gemini" | "claude";
@@ -813,6 +814,9 @@ export function normalizeConfigSnapshot(snapshot: ConfigStoreSnapshot | undefine
 }
 
 function contractVideoProtocol(model: string, current?: ModelProtocol): ModelProtocol {
+    // Keep the configured wire format across reloads, including custom plugins.
+    // A model-name preset must not turn a multi-image route into Sora multipart.
+    if (current && protocolAllowsCapability(current, "video")) return current;
     const contract = videoModelContract(model)?.protocol as ModelProtocol | undefined;
     if (contract) return contract;
     // A video profile must not keep a protocol that runs a different
@@ -820,7 +824,7 @@ function contractVideoProtocol(model: string, current?: ModelProtocol): ModelPro
     // so use the host's standard video protocol only when the stored protocol
     // is known to target another capability. Unknown/custom protocols stay
     // untouched.
-    return current && protocolAllowsCapability(current, "video") ? current : defaultProtocolForCapability("video");
+    return defaultProtocolForCapability("video");
 }
 
 function protocolAllowsCapability(protocol: ModelProtocol | undefined, capability: ModelCapability): boolean {
@@ -835,6 +839,11 @@ function reconcileChannelModelProfiles(channel: ModelChannel): ModelChannel {
     if (!channel.modelProfiles?.length) return channel;
     let changed = false;
     const modelProfiles = channel.modelProfiles.map((profile) => {
+        const gatewayProtocol = sistineloveSeedanceProtocol(channel.baseUrl, profile.model);
+        if (gatewayProtocol && (profile.protocol !== gatewayProtocol || profile.capability !== "video")) {
+            changed = true;
+            return { ...profile, capability: "video" as const, protocol: gatewayProtocol };
+        }
         const capability = modelProtocolCapability(profile.protocol);
         if (!capability || capability === profile.capability) return profile;
         changed = true;
@@ -1107,7 +1116,7 @@ export function resolveModelRequestConfig(config: AiConfig, value: string) {
     const modelProfile = channel.modelProfiles?.find((item) => item.model === model);
     const modelProtocol = normalizeModelProtocol(modelProfile?.protocol);
     const capability = modelProfile?.capability || inferProtocolCapabilityFromModel(model);
-    const interfaceType = modelProtocol
+    const interfaceType = sistineloveSeedanceProtocol(channel.baseUrl, model) || modelProtocol
         || normalizeModelProtocol(channel.interfaceType)
         || (capability === "video" || channel.scope === "system" || !usesOpenAICompatibleProtocolDefault(channel.apiFormat)
             ? undefined

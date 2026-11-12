@@ -245,7 +245,7 @@ func (h *lanAssetHandler) importAsset(c *gin.Context) {
 			}
 			actualHash, hashErr := hashOwnedLocalResource(c.Request.Context(), h.service, owner.ID, resource, maxBytes)
 			if hashErr == nil && actualHash == contentHash && !existing.VerifiedAt.IsZero() {
-				ok(c, gin.H{"resource": localAssetResourceSummary(resource)})
+				ok(c, h.importReceipt(catalogID, contentHash, resource))
 				return
 			}
 			if errors.Is(hashErr, os.ErrNotExist) {
@@ -357,7 +357,20 @@ func (h *lanAssetHandler) importAsset(c *gin.Context) {
 		failInternal(c, http.StatusInternalServerError, err)
 		return
 	}
-	ok(c, gin.H{"resource": localAssetResourceSummary(resource)})
+	ok(c, h.importReceipt(catalogID, contentHash, resource))
+}
+
+// The transfer already verified and registered these bytes. Return the local
+// catalog claim with the resource so clients need not hash the file a second time.
+func (h *lanAssetHandler) importReceipt(catalogID, contentHash string, resource *model.Resource) gin.H {
+	identity := sha256.Sum256([]byte(catalogID + ":" + h.manager.NodeID() + ":" + contentHash))
+	asset := lanCatalogAsset{
+		EntryID: "asset-" + hex.EncodeToString(identity[:]), ContentHash: contentHash,
+		Name: fallbackLANAssetName(resource), MIMEType: safeMIMEType(resource.MimeType),
+		Kind: resource.Kind, Size: resource.Size, Width: resource.Width, Height: resource.Height,
+		DurationMs: resource.DurationMs, CreatedBy: h.manager.NodeID(), CreatedAt: resource.CreatedAt,
+	}
+	return gin.H{"resource": localAssetResourceSummary(resource), "asset": asset}
 }
 
 func (h *lanAssetHandler) assetStatuses(c *gin.Context) {

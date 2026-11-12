@@ -88,6 +88,18 @@ func TestW3CTracePersistenceAndOwnerIsolation(t *testing.T) {
 	}
 }
 
+func TestObserverReceivesTaskStartAndCompletionEvents(t *testing.T) {
+	r := newRecorder(t, t.TempDir())
+	var events []Event
+	r.SetObserver(func(event Event) { events = append(events, event) })
+	ctx, finish := r.Start(context.Background(), "generation.execute", Fields{UserID: "owner", TaskID: "task-1"})
+	_ = ctx
+	finish("")
+	if len(events) != 2 || events[0].Phase != "start" || events[1].Phase != "end" || events[1].Status != "ok" || events[1].TaskID != "task-1" {
+		t.Fatalf("observer task lifecycle = %+v", events)
+	}
+}
+
 func TestSnapshotTimeWindowIncludesBothBounds(t *testing.T) {
 	r := newRecorder(t, t.TempDir())
 	base := time.Now().UTC().Truncate(time.Second).Add(-time.Minute)

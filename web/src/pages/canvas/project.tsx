@@ -645,7 +645,7 @@ function InfiniteCanvasPage() {
         deleteCurrentProject,
     });
 
-    const versions = useCanvasVersionHistory(projectId, restoreCanvasProjectVersion, currentProject);
+    const versions = useCanvasVersionHistory(projectId, restoreCanvasProjectVersion, currentProject, collaboration.restoreVersion);
     // 画布右侧只有一个栏位：助手和版本记录互斥，谁被打开另一个就让位。
     const assistant = useCanvasAssistant({
         canvasId: projectId,

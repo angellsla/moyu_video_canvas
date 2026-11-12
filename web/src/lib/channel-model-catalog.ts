@@ -3,6 +3,7 @@ import { modelProtocolCapability, protocolForModelCatalog, type ModelProtocol } 
 import type { ModelChannel } from "@/stores/use-config-store";
 import { imageModelContract } from "@/lib/model-image-contracts";
 import { knownModelCapability } from "@/lib/model-name-capabilities";
+import { sistineloveSeedanceProtocol } from "@/lib/sistinelove-video";
 import { sanitizeVideoPriceQuote, seedancePortraitModel, type VideoPriceQuote } from "@/lib/seedance-portrait";
 
 export type ChannelModelCatalogOption = { value: string; label?: string };
@@ -144,9 +145,18 @@ export function mergeFetchedChannelModelProfiles(channel: ModelChannel, catalog:
         // New API/custom channels whose catalog may expose only model IDs.
         const mapped = catalogModelMapping(item, { providerNameFallback: true });
         const knownCapability = knownModelCapability(item.id);
-        const inferredProtocol = knownCapability
-            ? protocolTemplateForNewCatalogModel(knownCapability, channel.interfaceType)
-            : mapped.protocol || protocolForModelCatalog(item.supportedEndpointTypes);
+        const catalogProtocol = mapped.protocol || protocolForModelCatalog(item.supportedEndpointTypes);
+        const existingProtocolCapability = modelProtocolCapability(existing?.protocol);
+        // Model names identify a capability, not a wire format. In particular,
+        // refreshing Seedance must not replace a chosen multi-image protocol.
+        const gatewayProtocol = sistineloveSeedanceProtocol(channel.baseUrl, item.id);
+        const inferredProtocol = gatewayProtocol || (knownCapability
+            ? existing?.protocol && (existingProtocolCapability === knownCapability || (!existingProtocolCapability && existing.capability === knownCapability))
+                ? existing.protocol
+                : modelProtocolCapability(catalogProtocol) === knownCapability
+                  ? catalogProtocol
+                  : protocolTemplateForNewCatalogModel(knownCapability, channel.interfaceType)
+            : catalogProtocol);
         const catalogVideo = sanitizeServerVideoCapability(item.videoCapabilities);
         const inferredCapability = knownCapability || mapped.capability || modelProtocolCapability(inferredProtocol) || item.modelType || (catalogVideo ? "video" : undefined);
         const sourcedImage = inferredCapability === "image" && item.imageCapabilitiesVersion ? sanitizeServerImageCapability(item.imageCapabilities) : null;

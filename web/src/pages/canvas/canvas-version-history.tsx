@@ -11,6 +11,8 @@ import { captureUserScope, userScopeMatches } from "@/lib/user-scope-guard";
 import type { CanvasProject } from "@/stores/canvas/use-canvas-store";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { canvasSyncProgressKey, useSyncProgressStore } from "@/stores/use-sync-progress-store";
+import { loadSharedCanvasHistory, previewSharedCanvasHistory, type SharedCanvasHistory } from "@/services/lan-collaboration-history";
+import type { PortableSharedCanvasContent } from "@/services/collaborative-canvas-document";
 import "./canvas-version-history.css";
 
 export type CanvasVersionPreviewState = {
@@ -20,10 +22,11 @@ export type CanvasVersionPreviewState = {
     kind: "cloud" | "draft";
     snapshot?: CanvasHistoryEntry;
     project?: CanvasProject;
+    sharedContent?: PortableSharedCanvasContent;
     error?: string;
 };
 
-export function useCanvasVersionHistory(projectId: string, onRestore: (snapshotId: string, revision: number) => Promise<void>, projectFromEditor?: CanvasProject) {
+export function useCanvasVersionHistory(projectId: string, onRestore: (snapshotId: string, revision: number) => Promise<void>, projectFromEditor?: CanvasProject, onRestoreShared?: (content: PortableSharedCanvasContent) => Promise<void>) {
     const { message, modal } = App.useApp();
     const desktop = Boolean(Grid.useBreakpoint().lg);
     const scope = getActiveUserScope();
@@ -35,6 +38,8 @@ export function useCanvasVersionHistory(projectId: string, onRestore: (snapshotI
     const isCurrentContext = () => contextRef.current === context && userScopeMatches(expectedScope);
     const storedProject = useCanvasStore((state) => state.projects.find((project) => project.id === projectId));
     const currentProject = projectFromEditor || storedProject;
+    const sharedCanvasId = currentProject?.sharedCanvasId;
+    const sharedHistoryRef = useRef<SharedCanvasHistory | null>(null);
     const draftCount = useSyncProgressStore((state) => state.syncingProjects[canvasSyncProgressKey(projectId)]?.draftCount);
     const [open, setOpen] = useState(false);
     const [listOpen, setListOpen] = useState(true);
@@ -76,7 +81,11 @@ export function useCanvasVersionHistory(projectId: string, onRestore: (snapshotI
         setError("");
         setEntries([]);
         setCurrentRevision(undefined);
-        void listCanvasHistory(projectId, controller.signal)
+        sharedHistoryRef.current = null;
+        void (sharedCanvasId ? loadSharedCanvasHistory(sharedCanvasId, controller.signal).then((history) => {
+            if (!controller.signal.aborted && isCurrentContext()) sharedHistoryRef.current = history;
+            return history;
+        }) : listCanvasHistory(projectId, controller.signal))
             .then((result) => {
                 if (controller.signal.aborted || !isCurrentContext()) return;
                 setEntries(result.snapshots);
@@ -90,7 +99,7 @@ export function useCanvasVersionHistory(projectId: string, onRestore: (snapshotI
                 if (!controller.signal.aborted && isCurrentContext()) setLoading(false);
             });
         return () => controller.abort();
-    }, [open, projectId, reload, scope, scopeEpoch]);
+    }, [open, projectId, sharedCanvasId, reload, scope, scopeEpoch]);
 
     useEffect(() => {
         if (!open) return;
@@ -126,9 +135,14 @@ export function useCanvasVersionHistory(projectId: string, onRestore: (snapshotI
         const selection: CanvasVersionPreviewState = { key: entry.id, label: canvasHistoryDisplayLabel(entries, entry.id), date: entry.contentUpdatedAt, kind: "cloud", snapshot: entry };
         setPreview(selection);
         setListOpen(false);
-        void getCanvasHistoryEntry(projectId, entry.id, controller.signal)
-            .then(({ project }) => {
-                if (!controller.signal.aborted && previewRequest.current === controller && isCurrentContext()) setPreview({ ...selection, project });
+        const read = async () => {
+            if (!sharedCanvasId) return getCanvasHistoryEntry(projectId, entry.id, controller.signal);
+            if (!sharedHistoryRef.current || !currentProject) throw new Error("请刷新协作历史版本");
+            return previewSharedCanvasHistory(currentProject, sharedHistoryRef.current, entry.id, controller.signal);
+        };
+        void read()
+            .then((result) => {
+                if (!controller.signal.aborted && previewRequest.current === controller && isCurrentContext()) setPreview({ ...selection, project: result.project, sharedContent: "content" in result ? result.content : undefined });
             })
             .catch((cause) => {
                 if (!controller.signal.aborted && previewRequest.current === controller && isCurrentContext()) setPreview({ ...selection, error: cause instanceof Error ? cause.message : "预览读取失败，请重新选择版本" });
@@ -141,7 +155,7 @@ export function useCanvasVersionHistory(projectId: string, onRestore: (snapshotI
         setConfirming(true);
         modal.confirm({
             title: `恢复${preview.label}的内容？`,
-            content: "恢复前会备份当前画布，并保留本机草稿。恢复后会生成一个新版本。",
+            content: sharedCanvasId ? "恢复前会保留本机草稿。历史内容将作为新的协作编辑同步给成员，画布名称、聊天和本机界面设置保持当前值。" : "恢复前会备份当前画布，并保留本机草稿。恢复后会生成一个新版本。",
             okText: "恢复此版本",
             cancelText: "取消",
             afterClose: () => setConfirming(false),
@@ -152,10 +166,13 @@ export function useCanvasVersionHistory(projectId: string, onRestore: (snapshotI
                 }
                 setRestoring(true);
                 try {
-                    const snapshotProject = currentProject || useCanvasStore.getState().openProject(projectId);
+                    const snapshotProject = useCanvasStore.getState().openProject(projectId) || currentProject;
                     if (snapshotProject) await preserveCanvasSyncDraft(snapshotProject, scope);
                     if (!isCurrentContext()) return;
-                    await onRestore(selected.id, currentRevision);
+                    if (sharedCanvasId) {
+                        if (!preview.sharedContent || !onRestoreShared) throw new Error("协作历史内容尚未就绪，请重新选择版本");
+                        await onRestoreShared(preview.sharedContent);
+                    } else await onRestore(selected.id, currentRevision);
                     returnToCurrent();
                     setReload((value) => value + 1);
                     message.success("已恢复内容并保存为新版本");

@@ -28,6 +28,18 @@ type Recorder struct {
 	tracer   trace.Tracer
 	launchID string
 	closed   bool
+	observer func(Event)
+}
+
+// SetObserver forwards the same sanitized lifecycle evidence to another local
+// sink. The observer is diagnostic-only and runs outside the recorder lock.
+func (r *Recorder) SetObserver(observer func(Event)) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.observer = observer
+	r.mu.Unlock()
 }
 
 func New(dataDir string) (*Recorder, error) {
@@ -161,9 +173,15 @@ func (r *Recorder) reject(owner string) {
 
 func (r *Recorder) record(event Event, durable bool) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if !r.closed {
-		r.journal.append(event, durable)
+	if r.closed {
+		r.mu.Unlock()
+		return
+	}
+	r.journal.append(event, durable)
+	observer := r.observer
+	r.mu.Unlock()
+	if observer != nil {
+		observer(event)
 	}
 }
 

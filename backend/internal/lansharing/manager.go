@@ -733,6 +733,7 @@ func (m *Manager) appendCatalogUpdate(ctx context.Context, catalogID string, upd
 		if err := m.db.WithContext(ctx).Model(&catalog).Update("updated_at", row.CreatedAt).Error; err != nil {
 			return false, err
 		}
+		m.notifyCollaborationCatalogUpdate(ctx, catalogID)
 		if broadcast {
 			m.scheduleKnownCatalogSync()
 		}

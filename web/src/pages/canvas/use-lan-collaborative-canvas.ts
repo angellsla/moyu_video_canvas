@@ -25,10 +25,14 @@ import {
     readPortableSharedCanvasContent,
     restoreLocalSharedCanvasContent,
     retainUnresolvedSharedCanvasAssets,
+    retainLocalSharedCanvasAssets,
+    toPortableSharedCanvasContent,
+    collectSharedCanvasAssetReferences,
+    restoreCollaborativeCanvasVersion,
     type SharedCanvasContent,
     type PortableSharedCanvasContent,
 } from "@/services/collaborative-canvas-document";
-import { createSharedCanvasLocalAssetResolver, getSharedCanvasLocalAssetBindings, getSharedCanvasAssetReadiness, makePortableSharedCanvasContent, prepareSharedCanvasLocalAssetValues, queueSharedCanvasAssetRetries, type SharedCanvasAssetReadiness } from "@/services/lan-collaboration-assets";
+import { createSharedCanvasLocalAssetResolver, getSharedCanvasLocalAssetBindings, getSharedCanvasAssetReadiness, prepareSharedCanvasAssetHashes, prepareSharedCanvasLocalAssetValues, queueSharedCanvasAssetRetries, type SharedCanvasAssetReadiness } from "@/services/lan-collaboration-assets";
 import { resourceFileUrl, resourceStorageKey } from "@/services/api/resources";
 import { useCanvasStore, type CanvasProject } from "@/stores/canvas/use-canvas-store";
 import type { ViewportTransform } from "@/types/canvas";
@@ -104,9 +108,11 @@ export function useLanCollaborativeCanvas({ project, projectLoaded, containerRef
     const [syncError, setSyncError] = useState("");
     const [localAssetError, setLocalAssetError] = useState("");
     const [transferError, setTransferError] = useState("");
+    const [readinessError, setReadinessError] = useState("");
     const [missingAssets, setMissingAssets] = useState<string[]>([]);
     const [assetReadiness, setAssetReadiness] = useState<SharedCanvasAssetReadiness | null>(null);
     const socketRef = useRef<WebSocket | null>(null);
+    const restoreVersionRef = useRef<((content: PortableSharedCanvasContent) => Promise<void>) | null>(null);
     const localNodeIdRef = useRef("");
     const nicknamesRef = useRef(new Map<string, string>());
     const localNicknameRef = useRef("本机");
@@ -159,10 +165,14 @@ export function useLanCollaborativeCanvas({ project, projectLoaded, containerRef
         let projectedPortable: PortableSharedCanvasContent = { title: "", nodes: [], connections: [], directorScenes: [] };
         let skipStoreWrite = false;
         let localChangePending = false;
-        let localConversionRunning = false;
+        const preparingSources = new Set<string>();
+        const preparationFailures = new Map<string, { after: number; message: string }>();
         let localSyncTimer: number | undefined;
         let syncVersion = 0;
-        let assetsInFlight: Promise<void> | null = null;
+        const assetsInFlight = new Set<string>();
+        const transferFailures = new Map<string, string>();
+        let assetCatalogRevision = 0;
+        let readinessInFlight: Promise<void> | null = null;
         let requestedAssets = "";
         let localAssets: Record<string, string> = {};
         const assetHashCache = new Map<string, string>();
@@ -172,6 +182,7 @@ export function useLanCollaborativeCanvas({ project, projectLoaded, containerRef
         setSyncError("");
         setLocalAssetError("");
         setTransferError("");
+        setReadinessError("");
         setPresence([]);
         setPeerInventory([]);
         setConnected(false);
@@ -186,8 +197,9 @@ export function useLanCollaborativeCanvas({ project, projectLoaded, containerRef
         const cachedProject = useCanvasStore.getState().projects.find((item) => item.id === room.id);
         let projectedLocal = projectContent(cachedProject || room);
 
-        const rememberLocalAssets = (resources: Record<string, string>) => {
-            localAssets = resources;
+        const rememberLocalAssets = (resources: Record<string, string>, verifiedHashes: string[] = []) => {
+            localAssets = { ...localAssets, ...resources };
+            for (const hash of verifiedHashes) if (!resources[hash]) delete localAssets[hash];
             for (const [hash, id] of Object.entries(resources)) {
                 assetHashCache.set(id, hash);
                 assetHashCache.set(resourceStorageKey(id), hash);
@@ -236,8 +248,19 @@ export function useLanCollaborativeCanvas({ project, projectLoaded, containerRef
             const hashes = collectContentHashes(portable);
             const nextMissing = hashes.filter((hash) => !localAssets[hash]);
             setMissingAssets(nextMissing);
-            if (JSON.stringify(hashes.sort()) !== requestedAssets) void refreshAssets();
-            const content = restoreLocalSharedCanvasContent(portable, createSharedCanvasLocalAssetResolver(localAssets));
+            setAssetReadiness((current) => ({
+                requiredCount: hashes.length,
+                local: { mappedCount: hashes.length - nextMissing.length, missingHashes: nextMissing },
+                peers: current?.requiredCount === hashes.length ? current.peers : [],
+            }));
+            if (JSON.stringify(hashes.sort()) !== requestedAssets) {
+                void refreshAssets();
+                void refreshReadiness();
+            }
+            const content = retainLocalSharedCanvasAssets(
+                restoreLocalSharedCanvasContent(portable, createSharedCanvasLocalAssetResolver(localAssets)),
+                projectedPortable, projectedLocal, portable,
+            );
             const serialized = JSON.stringify(portable);
             const documentChanged = serialized !== lastPortable;
             lastPortable = serialized;
@@ -262,30 +285,62 @@ export function useLanCollaborativeCanvas({ project, projectLoaded, containerRef
 
         // Network probes and file transfers never hold up node/content projection.
         function refreshAssets(): Promise<void> {
-            if (assetsInFlight) return assetsInFlight;
-            const hashes = collectContentHashes(readPortableSharedCanvasContent(doc)).sort();
-            requestedAssets = JSON.stringify(hashes);
+            const required = collectContentHashes(readPortableSharedCanvasContent(doc)).sort();
+            requestedAssets = JSON.stringify(required);
+            const hashes = required.filter((hash) => !assetsInFlight.has(hash));
+            if (!hashes.length || !alive()) return Promise.resolve();
+            const catalogRevision = assetCatalogRevision;
+            hashes.forEach((hash) => assetsInFlight.add(hash));
+            const acceptResources = (resources: Record<string, string>) => {
+                // Concurrent batches may return an older view of other bindings.
+                rememberLocalAssets(Object.fromEntries(hashes.filter((hash) => resources[hash]).map((hash) => [hash, resources[hash]])), hashes);
+            };
             const run = async () => {
                 if (!alive()) return;
                 const missing = hashes.filter((hash) => !localAssets[hash]);
                 if (missing.length) await queueSharedCanvasAssetRetries(catalogId, missing);
-                const resources = await prepareSharedCanvasLocalAssetValues(catalogId, hashes);
+                const resources = await prepareSharedCanvasLocalAssetValues(catalogId, hashes, (ready) => {
+                    if (!alive()) return;
+                    acceptResources(ready);
+                    void applyRemoteContent();
+                });
                 if (!alive()) return;
-                rememberLocalAssets(resources);
+                acceptResources(resources);
                 await applyRemoteContent();
-                const readiness = await getSharedCanvasAssetReadiness(catalogId, hashes);
+                hashes.forEach((hash) => transferFailures.delete(hash));
                 if (alive()) {
-                    setTransferError("");
-                    if (requestedAssets === JSON.stringify(collectContentHashes(readPortableSharedCanvasContent(doc)).sort())) setAssetReadiness(readiness);
+                    setTransferError(transferFailures.values().next().value || "");
+                    void refreshReadiness();
                 }
             };
-            assetsInFlight = run().catch((error) => {
-                if (alive()) setTransferError(error instanceof Error ? error.message : "协作素材暂未送达，后台将重试");
+            return run().catch((error) => {
+                if (alive()) {
+                    const message = error instanceof Error ? error.message : "协作素材暂未送达，后台将重试";
+                    hashes.forEach((hash) => transferFailures.set(hash, message));
+                    setTransferError(message);
+                }
             }).finally(() => {
-                assetsInFlight = null;
-                if (alive() && requestedAssets !== JSON.stringify(collectContentHashes(readPortableSharedCanvasContent(doc)).sort())) void refreshAssets();
+                hashes.forEach((hash) => assetsInFlight.delete(hash));
+                if (alive() && (catalogRevision !== assetCatalogRevision || requestedAssets !== JSON.stringify(collectContentHashes(readPortableSharedCanvasContent(doc)).sort()))) void refreshAssets();
             });
-            return assetsInFlight;
+        }
+
+        function refreshReadiness(): Promise<void> {
+            if (readinessInFlight) return readinessInFlight;
+            const hashes = collectContentHashes(readPortableSharedCanvasContent(doc)).sort();
+            const requested = JSON.stringify(hashes);
+            readinessInFlight = getSharedCanvasAssetReadiness(catalogId, hashes).then((readiness) => {
+                if (alive() && requested === JSON.stringify(collectContentHashes(readPortableSharedCanvasContent(doc)).sort())) {
+                    // Another transfer can have completed since this status query
+                    // began. Preserve its projected local readiness.
+                    const missingHashes = hashes.filter((hash) => !localAssets[hash]);
+                    setAssetReadiness({ ...readiness, local: { mappedCount: hashes.length - missingHashes.length, missingHashes } });
+                    setReadinessError("");
+                }
+            }).catch((error) => {
+                if (alive()) setReadinessError(error instanceof Error ? error.message : "素材状态查询失败，后台将重试");
+            }).finally(() => { readinessInFlight = null; });
+            return readinessInFlight;
         }
 
         const onDocUpdate = (update: Uint8Array, origin: unknown) => {
@@ -340,46 +395,97 @@ export function useLanCollaborativeCanvas({ project, projectLoaded, containerRef
         }
 
         async function syncLocalContent() {
-            if (!alive() || !initialized || localConversionRunning) return;
+            if (!alive() || !initialized) return;
             const current = useCanvasStore.getState().projects.find((item) => item.id === localProjectId);
             if (!current) return;
-            const version = syncVersion;
             const currentContent = projectContent(current);
+            const version = syncVersion;
             const basePortable = projectedPortable;
             const baseLocal = projectedLocal;
-            localConversionRunning = true;
+            // Publish graph edits using known hashes immediately. Disk/network work
+            // runs separately and can never keep remote projection suspended.
+            const prepared = toPortableSharedCanvasContent(currentContent, ({ localValue, source }) => assetHashCache.get(source?.value || localValue));
+            const portable = retainUnresolvedSharedCanvasAssets(prepared, basePortable, baseLocal, currentContent);
+            applyCollaborativeCanvasLocalChanges(doc, basePortable, portable);
+            projectedPortable = portable;
+            projectedLocal = currentContent;
+            localChangePending = false;
+            await applyRemoteContent();
+            if (!alive() || version !== syncVersion) return;
+            retryLocalAssets = collectSharedCanvasAssetReferences(currentContent).some(({ value, source }) => Boolean((source?.value || value).trim()) && !assetHashCache.has(source?.value || value));
+            await store.setItem(localAssetRetryKey(roomId, scope.userScope), retryLocalAssets);
+            if (!alive() || version !== syncVersion) return;
+            if (!retryLocalAssets) { if (alive()) setLocalAssetError(""); return; }
+            void prepareLocalAssets(currentContent);
+        }
+
+        async function prepareLocalAssets(currentContent: SharedCanvasContent) {
+            if (!alive()) return;
+            const references = collectSharedCanvasAssetReferences(currentContent).filter(({ value, source }) => {
+                const key = source?.value || value;
+                return key.trim() && !assetHashCache.has(key) && !preparingSources.has(key) && Date.now() >= (preparationFailures.get(key)?.after || 0);
+            });
+            if (!references.length) return;
+            const sources = new Set(references.map(({ value, source }) => source?.value || value));
+            sources.forEach((value) => preparingSources.add(value));
+            const version = syncVersion;
+            const cacheSize = assetHashCache.size;
             try {
-                const prepared = await makePortableSharedCanvasContent(catalogId, currentContent, assetHashCache);
-                const resources = await getSharedCanvasLocalAssetBindings(catalogId);
-                if (!alive()) return;
-                rememberLocalAssets(resources);
-                const portable = retainUnresolvedSharedCanvasAssets(prepared, basePortable, baseLocal, currentContent);
-                // Commit even during continuous dragging; subsequent edits use this
-                // local baseline, not remote fields the user has not seen yet.
-                applyCollaborativeCanvasLocalChanges(doc, basePortable, portable);
-                projectedPortable = portable;
-                projectedLocal = currentContent;
-                if (version !== syncVersion) return;
-                localChangePending = false;
-                retryLocalAssets = false;
-                await store.setItem(localAssetRetryKey(roomId, scope.userScope), false);
-                if (version === syncVersion) await applyRemoteContent();
-                if (alive()) setLocalAssetError("");
+                await prepareSharedCanvasAssetHashes(catalogId, references, assetHashCache, (hash, resourceId) => {
+                    if (!alive()) return;
+                    rememberLocalAssets({ [hash]: resourceId });
+                    scheduleLocalSync();
+                });
             } catch (error) {
-                if (alive()) setLocalAssetError(error instanceof Error ? error.message : "共享素材准备失败");
+                const message = error instanceof Error ? error.message : "共享素材准备失败";
+                for (const value of sources) if (!assetHashCache.has(value)) preparationFailures.set(value, { after: Date.now() + 5_000, message });
             } finally {
-                localConversionRunning = false;
-                if (alive() && version !== syncVersion) scheduleLocalSync();
+                try {
+                    const resources = await getSharedCanvasLocalAssetBindings(catalogId);
+                    if (alive()) rememberLocalAssets(resources);
+                } catch (error) {
+                    for (const value of sources) if (!assetHashCache.has(value)) preparationFailures.set(value, { after: Date.now() + 5_000, message: error instanceof Error ? error.message : "素材映射读取失败" });
+                }
+                for (const value of sources) {
+                    preparingSources.delete(value);
+                    if (assetHashCache.has(value)) preparationFailures.delete(value);
+                }
+                if (alive()) setLocalAssetError(preparationFailures.values().next().value?.message || "");
+                // Re-read the latest graph, never apply the stale preparation snapshot.
+                if (alive() && (version !== syncVersion || cacheSize !== assetHashCache.size)) scheduleLocalSync();
             }
         }
 
         function scheduleLocalSync() {
-            if (localSyncTimer !== undefined || localConversionRunning || !initialized) return;
+            if (localSyncTimer !== undefined || !initialized) return;
             localSyncTimer = window.setTimeout(() => {
                 localSyncTimer = undefined;
-                void syncLocalContent();
+                void syncLocalContent().catch((error) => {
+                    if (alive()) setSyncError(error instanceof Error ? error.message : "协作画布本地同步失败");
+                });
             }, EDIT_BATCH_MS);
         }
+
+        restoreVersionRef.current = async (content) => {
+            if (!alive() || !initialized) throw new Error("协作画布尚未就绪，请稍后重试");
+            await syncLocalContent();
+            await catchUp();
+            await flushUpdates();
+            if (!alive()) throw new Error("协作画布已关闭");
+            if (localChangePending) throw new Error("本机内容仍在更新，请稍后再恢复版本");
+            if (pendingUpdates.size) throw new Error("当前编辑已保存在本机，请等待同步完成后恢复版本");
+            // Restoring content does not rename the room or replace local UI/chat.
+            const target = { ...content, title: readPortableSharedCanvasContent(doc).title };
+            restoreCollaborativeCanvasVersion(doc, target);
+            projectedLocal = restoreLocalSharedCanvasContent(target, createSharedCanvasLocalAssetResolver(localAssets));
+            projectedPortable = target;
+            localChangePending = false;
+            retryLocalAssets = false;
+            await store.setItem(localAssetRetryKey(roomId, scope.userScope), false);
+            await applyRemoteContent();
+            await flushUpdates();
+            if (pendingUpdates.size) throw new Error("历史内容已恢复到本机，协作更新待连接恢复后发送");
+        };
 
         async function connect() {
             if (!alive()) return;
@@ -416,6 +522,12 @@ export function useLanCollaborativeCanvas({ project, projectLoaded, containerRef
                     let frame: LanCollaborationServerFrame;
                     try { frame = JSON.parse(String(event.data)) as LanCollaborationServerFrame; } catch { return; }
                     if (frame.type === "error") { setSyncError(frame.message); return; }
+                    if (frame.type === "asset-catalog" && frame.catalogId === catalogId) {
+                        assetCatalogRevision++;
+                        void refreshAssets();
+                        void refreshReadiness();
+                        return;
+                    }
                     if (frame.type === "update") {
                         if (frame.originNodeId !== localNodeIdRef.current) applyCollaborativeCanvasUpdate(doc, decodeLanCollaborationCanvasUpdate(frame), ORIGIN_REMOTE);
                     } else if (frame.type === "presence" && frame.peerId !== localNodeIdRef.current) {
@@ -481,7 +593,7 @@ export function useLanCollaborativeCanvas({ project, projectLoaded, containerRef
                 if (localChangePending) {
                     projectedPortable = readPortableSharedCanvasContent(doc);
                     projectedLocal = restoreLocalSharedCanvasContent(projectedPortable, createSharedCanvasLocalAssetResolver(localAssets));
-                }
+                } else projectedLocal = restoreLocalSharedCanvasContent(readPortableSharedCanvasContent(doc), createSharedCanvasLocalAssetResolver(localAssets));
                 await applyRemoteContent();
             }
             initialized = true;
@@ -494,6 +606,7 @@ export function useLanCollaborativeCanvas({ project, projectLoaded, containerRef
             if (!alive() || !initialized) return;
             void catchUp().then(() => flushUpdates()).catch(() => undefined);
             void refreshAssets();
+            void refreshReadiness();
             if (retryLocalAssets) scheduleLocalSync();
         }, 5_000);
         cursorTimer = window.setInterval(() => {
@@ -574,6 +687,7 @@ export function useLanCollaborativeCanvas({ project, projectLoaded, containerRef
 
         return () => {
             disposed = true;
+            restoreVersionRef.current = null;
             if (localSyncTimer !== undefined) window.clearTimeout(localSyncTimer);
             if (reconnectTimer) window.clearTimeout(reconnectTimer);
             if (pollTimer) window.clearInterval(pollTimer);
@@ -600,5 +714,10 @@ export function useLanCollaborativeCanvas({ project, projectLoaded, containerRef
         };
     }, [room?.id, room?.sharedCanvasId, room?.sharedCanvasAssetCatalogId, projectLoaded, containerRef]);
 
-    return { members, presence, connected, syncError: syncError || localAssetError || transferError, missingAssets, assetReadiness };
+    return { members, presence, connected, syncError: syncError || localAssetError || transferError || readinessError, missingAssets, assetReadiness,
+        restoreVersion: async (content: PortableSharedCanvasContent) => {
+            if (!restoreVersionRef.current) throw new Error("协作画布尚未就绪，请稍后重试");
+            await restoreVersionRef.current(content);
+        },
+    };
 }

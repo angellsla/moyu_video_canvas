@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -27,6 +28,8 @@ import (
 	"infinite-canvas/backend/internal/modelcatalog"
 	"infinite-canvas/backend/internal/repository"
 	"infinite-canvas/backend/internal/runtimeinfo"
+	"infinite-canvas/backend/internal/runtimelog"
+	"infinite-canvas/backend/internal/supporttrace"
 	httptransport "infinite-canvas/backend/internal/transport/http"
 	"infinite-canvas/backend/internal/workspace"
 
@@ -49,6 +52,7 @@ type Runtime struct {
 	lanSharing         *lansharing.Manager
 	lanAssetScanCancel context.CancelFunc
 	lanAssetScanDone   chan struct{}
+	runtimeLogger      *runtimelog.Logger
 	listener           net.Listener
 	httpServer         *http.Server
 	serveErr           chan error
@@ -63,6 +67,9 @@ func Open(_ context.Context, raw Config) (result *Runtime, openErr error) {
 	cfg := raw.withDefaults()
 	if cfg.Profile != ProfileServer && cfg.Profile != ProfileDesktop {
 		return nil, fmt.Errorf("不支持的运行模式：%s", cfg.Profile)
+	}
+	if cfg.RuntimeLogger != nil && cfg.Profile != ProfileDesktop {
+		return nil, errors.New("程序运行日志仅支持桌面模式")
 	}
 	if strings.TrimSpace(cfg.DataDir) == "" {
 		return nil, errors.New("后端数据目录不能为空")
@@ -162,6 +169,27 @@ func Open(_ context.Context, raw Config) (result *Runtime, openErr error) {
 			return nil, fmt.Errorf("注册局域网素材传输: %w", err)
 		}
 	}
+	if cfg.RuntimeLogger != nil {
+		svc.SupportTrace().SetObserver(func(event supporttrace.Event) {
+			message := event.Name + " " + event.Phase
+			if event.Phase == "end" {
+				message = event.Name + " completed"
+				if event.Status == "error" {
+					message = event.Name + " failed"
+				}
+			}
+			level := "info"
+			if event.Status == "error" {
+				level = "error"
+			}
+			cfg.RuntimeLogger.Backend(runtimelog.Entry{
+				Level:    level,
+				Category: "task", Code: event.Name + "_" + event.Phase, Message: message,
+				TaskID: event.TaskID, CanvasID: event.CanvasID, NodeID: event.NodeID, RequestID: event.RequestID,
+				TraceID: event.TraceID, LaunchID: event.LaunchID, Status: event.Status, Reason: event.Reason, DurationMs: event.DurationMs,
+			})
+		})
+	}
 
 	// 桌面启动令牌在构建路由前解析：它既是整个 API 的入口凭据，也是「本机受信任 UI」
 	// 的判据（内置助手签发 UI 会话时使用）。服务端形态没有它，DesktopTrust 为 nil。
@@ -184,9 +212,15 @@ func Open(_ context.Context, raw Config) (result *Runtime, openErr error) {
 	}
 
 	router := gin.New()
-	router.Use(gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
+	accessLogWriter := gin.DefaultWriter
+	panicLogWriter := gin.DefaultErrorWriter
+	if cfg.RuntimeLogger != nil {
+		accessLogWriter = cfg.RuntimeLogger.Writer()
+		panicLogWriter = cfg.RuntimeLogger.Writer()
+	}
+	router.Use(gin.LoggerWithConfig(gin.LoggerConfig{Output: accessLogWriter, SkipQueryString: true, Formatter: func(param gin.LogFormatterParams) string {
 		return fmt.Sprintf("%s - [%s] \"%s %s\" %d %s %s\n", param.ClientIP, param.TimeStamp.Format(time.RFC3339), param.Method, param.Path, param.StatusCode, param.Latency, param.ErrorMessage)
-	}), gin.Recovery())
+	}}), gin.RecoveryWithWriter(io.MultiWriter(panicLogWriter, gin.DefaultErrorWriter)))
 	router.Use(canvasHandler.RequestCorrelationMiddleware())
 	for _, middleware := range cfg.RouterMiddleware {
 		router.Use(middleware)
@@ -220,6 +254,9 @@ func Open(_ context.Context, raw Config) (result *Runtime, openErr error) {
 		DesktopTrust:       desktopTrust(launchToken, uiBootstrapToken),
 	})
 	businessCatalog := canvasHandler.NewBusinessCatalog(router.Routes())
+	// Keep the diagnostics ingestion route out of external business-client
+	// capabilities: only the trusted desktop UI may append frontend logs.
+	canvasHandler.RegisterRuntimeLogRoutes(api, cfg.RuntimeLogger)
 	canvasHandler.RegisterBusinessDiscovery(api, businessCatalog, svc)
 	router.NoRoute(func(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "msg": "请求不存在"})
@@ -296,6 +333,7 @@ func Open(_ context.Context, raw Config) (result *Runtime, openErr error) {
 		uiBootstrapToken: uiBootstrapToken,
 		assistantHost:    assistantHost,
 		lanSharing:       lanSharing,
+		runtimeLogger:    cfg.RuntimeLogger,
 		serveErr:         make(chan error, 1),
 	}, nil
 }
@@ -349,6 +387,9 @@ func (r *Runtime) Start() error {
 		return err
 	}
 	r.listener = listener
+	if r.runtimeLogger != nil {
+		r.runtimeLogger.Backend(runtimelog.Entry{Level: "info", Category: "runtime", Code: "backend_started", Message: fmt.Sprintf("Backend HTTP service started at %s", r.listener.Addr())})
+	}
 	httpContext, cancelHTTP := context.WithCancel(context.Background())
 	r.httpServer = &http.Server{Handler: r.handler, ReadHeaderTimeout: 10 * time.Second,
 		BaseContext: func(net.Listener) context.Context { return httpContext }}
@@ -517,6 +558,9 @@ func (r *Runtime) Close(ctx context.Context) error {
 			if err := sqlDB.Close(); err != nil {
 				failures = append(failures, err)
 			}
+		}
+		if r.runtimeLogger != nil {
+			r.runtimeLogger.Backend(runtimelog.Entry{Level: "info", Category: "runtime", Code: "backend_stopped", Message: "Backend HTTP service stopped"})
 		}
 		r.closeErr = errors.Join(failures...)
 		if r.workspaceLock != nil {

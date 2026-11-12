@@ -38,12 +38,12 @@ export type LanCollaborationStreamTicket = {
 
 export type LanCollaborationClientFrame = { type: "update"; updateBase64: string } | { type: "presence"; state: unknown };
 
-export type LanCollaborationServerFrame = { type: "update"; canvasId: string; updateBase64: string; originNodeId: string } | { type: "presence"; canvasId: string; state: unknown; peerId: string; expiresAt: string } | { type: "error"; message: string };
+export type LanCollaborationServerFrame = { type: "update"; canvasId: string; updateBase64: string; originNodeId: string } | { type: "presence"; canvasId: string; state: unknown; peerId: string; expiresAt: string } | { type: "asset-catalog"; canvasId: string; catalogId: string } | { type: "error"; message: string };
 
 const BASE_PATH = "/lan-sharing/canvases";
 
-export function getLanCollaborationCanvases() {
-    return http.get<{ canvases: LanCollaborationCanvas[] }>(BASE_PATH);
+export function getLanCollaborationCanvases(signal?: AbortSignal) {
+    return http.get<{ canvases: LanCollaborationCanvas[] }>(BASE_PATH, { signal });
 }
 
 export function createLanCollaborationCanvas(name: string, initialUpdate?: Uint8Array, assetCatalogId?: string) {
@@ -62,9 +62,10 @@ export function deleteLanCollaborationCanvas(canvasId: string) {
     return http.delete<{ canvasId: string }>(`${BASE_PATH}/${encodeURIComponent(canvasId)}`);
 }
 
-export function getLanCollaborationCanvasUpdates(canvasId: string, after = "") {
+export function getLanCollaborationCanvasUpdates(canvasId: string, after = "", signal?: AbortSignal) {
     return http.get<LanCollaborationCanvasUpdatePage>(`${BASE_PATH}/${encodeURIComponent(canvasId)}/updates`, {
         params: { after, limit: 200 },
+        signal,
     });
 }
 

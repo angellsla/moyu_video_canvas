@@ -7,6 +7,7 @@ import { localForageStorageForScope } from "@/lib/localforage-storage";
 import { getActiveUserScope } from "@/lib/user-scope";
 import { createDiagnosticEventStore } from "./diagnostic-event-store";
 import { createDiagnosticTrace, diagnosticTraceHeaders, parseDiagnosticTraceparent, validTraceId } from "./diagnostic-trace";
+import { appendDesktopRuntimeLog } from "./runtime-log-sink";
 export type { ClientDiagnosticCoverage } from "./diagnostic-event-store";
 
 export type ClientDiagnosticLevel = "info" | "warning" | "error";
@@ -69,6 +70,7 @@ eventStore.setScope(scopedUserId);
 export function initializeClientDiagnostics() {
     if (initialized || typeof window === "undefined") return;
     initialized = true;
+    recordDiagnosticEvent({ level: "info", category: "runtime", code: "frontend_started", message: "前端运行初始化完成" });
     window.addEventListener("error", (event) => {
         recordDiagnosticEvent({
             level: "error",
@@ -170,7 +172,9 @@ export function setDiagnosticUserScope(userId: string) {
 }
 
 export function recordDiagnosticEvent(input: DiagnosticEventInput) {
-    eventStore.record(sanitizeEvent({ ...input, id: createDiagnosticId("event"), timestamp: input.timestamp || new Date().toISOString(), launchId, sessionId: launchId }));
+	const event = sanitizeEvent({ ...input, id: createDiagnosticId("event"), timestamp: input.timestamp || new Date().toISOString(), launchId, sessionId: launchId });
+	eventStore.record(event);
+	appendDesktopRuntimeLog(event);
 }
 
 function sanitizeEvent(input: ClientDiagnosticEvent): ClientDiagnosticEvent {
@@ -250,7 +254,7 @@ export function safeDiagnosticId(value?: string) {
 
 function safeOperationId(value?: string) { return typeof value === "string" && /^[A-Za-z0-9:_-]{1,128}$/.test(value) && !/^(?:sk-|eyJ)|bearer|password|api[_-]?key|secret|token/i.test(value) ? value : undefined; }
 
-function isDiagnosticRoute(route: string) { return route.startsWith("/diagnostics"); }
+function isDiagnosticRoute(route: string) { return route.startsWith("/diagnostics") || route.startsWith("/runtime-logs"); }
 
 function requestContext(config: AxiosRequestConfig): Partial<ClientDiagnosticEvent> {
     const route = appPathnameFrom(config.url);

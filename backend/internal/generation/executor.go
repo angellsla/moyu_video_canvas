@@ -46,6 +46,9 @@ func Execute(ctx context.Context, input Input) (map[string]any, error) {
 	} else if strings.TrimSpace(input.Config.ChannelID) != "" {
 		return nil, errors.New("无法解析系统渠道配置")
 	}
+	if input.Mode == "video" && ResumedProviderRequestID(ctx) == "" {
+		input.Config = normalizeSistineloveVideoConfig(input.Config)
+	}
 	applyCanvasTextStreaming(runtime.Call.TaskType, &input)
 	if workflow.IsProviderInterface(input.Config.InterfaceType) {
 		return executeWorkflow(ctx, runtime, userID, input)

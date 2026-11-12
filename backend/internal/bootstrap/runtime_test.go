@@ -8,9 +8,13 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"infinite-canvas/backend/internal/runtimelog"
 	"infinite-canvas/backend/internal/workspace"
 )
 
@@ -201,6 +205,55 @@ func TestRuntimeOpenStartClose(t *testing.T) {
 	}
 	if runtime.Ready() {
 		t.Fatal("runtime must not remain ready after Close")
+	}
+}
+
+func TestDesktopRuntimeLoggerCapturesLifecycleAndRequests(t *testing.T) {
+	logDir := t.TempDir()
+	logger, err := runtimelog.Open(logDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataDir := t.TempDir()
+	runtime, err := Open(context.Background(), Config{Profile: ProfileDesktop, DataDir: dataDir, ListenAddr: "127.0.0.1:0", AutoMigrate: true, RuntimeLogger: logger})
+	if err != nil {
+		logger.Close()
+		t.Fatal(err)
+	}
+	if err := runtime.Start(); err != nil {
+		_ = runtime.Close(context.Background())
+		logger.Close()
+		t.Fatal(err)
+	}
+	request, err := http.NewRequest(http.MethodGet, runtime.BaseURL()+"/health/ready", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("X-Desktop-Token", runtime.LaunchToken())
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("health status = %d", response.StatusCode)
+	}
+	if err := runtime.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	logger.Close()
+	files, err := filepath.Glob(filepath.Join(logDir, "backend-*.log"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("backend logs = %v, err=%v", files, err)
+	}
+	data, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"backend_started", "GET /api/health/ready", "backend_stopped"} {
+		if !strings.Contains(string(data), value) {
+			t.Errorf("backend log missing %q: %s", value, data)
+		}
 	}
 }
 

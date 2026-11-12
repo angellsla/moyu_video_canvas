@@ -22,16 +22,38 @@ func RunVideoTask(ctx context.Context, input Input) (map[string]interface{}, err
 }
 
 func RunVideoTaskWithPolicy(ctx context.Context, input Input, pollPolicy VideoPollPolicy) (map[string]interface{}, error) {
+	return runVideoTaskWithMediaClient(ctx, input, pollPolicy, newSistineloveMediaClient())
+}
+
+func runVideoTaskWithMediaClient(ctx context.Context, input Input, pollPolicy VideoPollPolicy, mediaClient sistineloveMediaClient) (map[string]interface{}, error) {
 	pollPolicy = NormalizeVideoPollPolicy(pollPolicy)
 	// 路由顺序是协议边界，不是“哪个请求先试”：官方声明式接口必须由已注册适配器执行，
 	// 缺少适配器时直接失败，不能偷偷退回遗留手写协议；只有未声明为官方插件的旧渠道才继续走兼容分支。
 	if strings.TrimSpace(input.Mode) == "" {
 		input.Mode = "video"
 	}
+	if ResumedProviderRequestID(ctx) == "" {
+		input.Config = normalizeSistineloveVideoConfig(input.Config)
+	}
 	// 已有官方声明式插件的 InterfaceType 只走适配器。未注入 registry 时补官方包，
 	// 显式空 registry 则报“插件未安装”，不再回退到手写协议。
 	ctx = EnsureOfficialProtocolAdapter(ctx, input.Config.InterfaceType)
 	if adapter, ok := DeclarativeProtocolAdapterForContext(ctx, input.Config.InterfaceType); ok {
+		if usesSistineloveUpload(input) && ResumedProviderRequestID(ctx) == "" {
+			runtime, _ := RuntimeFromContext(ctx)
+			if err := setExecutionStage(ctx, runtime, "正在上传参考素材并获取链接"); err != nil {
+				return nil, err
+			}
+			if err := prepareSistineloveReferences(ctx, &input, mediaClient); err != nil {
+				return nil, err
+			}
+			if runtime.ReferenceProgress != nil {
+				runtime.ReferenceProgress.ClearReference()
+			}
+			if err := setExecutionStage(ctx, runtime, "正在提交生成任务"); err != nil {
+				return nil, err
+			}
+		}
 		return RunProtocolAdapterTaskWithPolicy(ctx, input, adapter, pollPolicy)
 	}
 	if label, official := OfficialDeclarativeVideoInterface(input.Config.InterfaceType); official {

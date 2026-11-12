@@ -608,6 +608,43 @@ add({
 });
 
 add({
+  id: "sistinelove-seedance-video", providerId: "sistinelove-seedance-video", name: "墨羽 Seedance 多素材视频", vendor: "Sistinelove", capability: "video",
+  baseUrl: "https://video.sistinelove.cn", auth: bearer, requiresPublicMediaUrls: true,
+  params: [
+    ["model", "string", true, "model", "Seedance 模型名称。"],
+    ["prompt", "string", true, "prompt", "视频提示词。"],
+    ["duration", "integer", false, "duration", "视频时长（秒）。"],
+    ["aspectRatio", "string", false, "aspect_ratio", "画幅比例。"],
+    ["resolution", "string", false, "resolution", "分辨率档位。"],
+    ["images", "media[]", false, "images", "按顺序提交参考图片 URL 数组。"],
+    ["videos", "media[]", false, "videos", "按顺序提交参考视频 URL 数组。"],
+    ["audios", "media[]", false, "audios", "按顺序提交参考音频 URL 数组。"],
+    ["generateAudio", "boolean", false, "generate_audio", "是否生成音频。"],
+    ["watermark", "boolean", false, "watermark", "是否添加水印。"],
+  ],
+  create: jsonCreate("/v1/videos", {
+    model: ref("request.model"), prompt: ref("request.prompt"),
+    duration: omit(ref("request.duration")), aspect_ratio: omit(ref("request.aspectRatio")), resolution: omit(ref("request.resolution")),
+    images: omit(map(sorted(ref("request.images")), "media", ref("media.value"))),
+    videos: omit(map(sorted(ref("request.videos")), "media", ref("media.value"))),
+    audios: omit(map(sorted(ref("request.audios")), "media", ref("media.value"))),
+    generate_audio: ref("request.generateAudio"), watermark: ref("request.watermark"),
+    metadata: conditional(
+      ref("request.providerOptions.sistinelove-seedance-video.metadata"),
+      ref("request.providerOptions.sistinelove-seedance-video.metadata"),
+      {},
+    ),
+  }),
+  poll: { method: "GET", path: "/v1/videos/{{taskId}}" },
+  result: { method: "GET", path: "/v1/videos/{{taskId}}/content", headers: { Accept: "video/mp4" } },
+  response: asyncResponse("video", {
+    taskId: coalesce(ref("response.id"), ref("response.task_id"), ref("response.data.id"), ref("response.data.task_id"), ref("taskId")),
+    videos: coalesce(ref("response.video_url"), ref("response.url"), ref("response.data.video_url"), ref("response.data.url"), ref("response.output.url"))
+  }),
+  notes: "按提供的 Seedance 网关合同发送 JSON 字符串数组。桌面后端先把所有图片、视频和音频参考素材分别以 multipart file 上传到 https://img.sistinelove.cn/img_up，并用 img_id 请求 /q 获取 img_url，全部素材就绪后才提交生成。此上传行为仅适用于 video.sistinelove.cn 的 Seedance 线路或明确选择该专属协议的渠道。",
+});
+
+add({
   id: "openai-videos", providerId: "newapi", name: "OpenAI Videos / Sora", vendor: "OpenAI", capability: "video",
   baseUrl: "https://api.openai.com", auth: bearer, params: videoParams, requiresPublicMediaUrls: false,
   create: {

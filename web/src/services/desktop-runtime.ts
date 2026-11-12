@@ -84,6 +84,11 @@ export function getDesktopAppBinding(): DesktopRuntimeBinding | undefined {
 }
 
 let nativeFetch: typeof fetch | undefined;
+let desktopRuntimeConfigured = false;
+
+export function isDesktopRuntimeConfigured() {
+    return desktopRuntimeConfigured;
+}
 
 function isDesktopRuntimeConfig(value: unknown): value is DesktopRuntimeConfig {
     if (!value || typeof value !== "object") return false;
@@ -92,6 +97,7 @@ function isDesktopRuntimeConfig(value: unknown): value is DesktopRuntimeConfig {
 }
 
 export function configureDesktopRuntime(config: DesktopRuntimeConfig) {
+    desktopRuntimeConfigured = true;
     const baseURL = config.baseURL.replace(/\/+$/u, "");
     configureApiRuntime(baseURL, config.launchToken, config.uiBootstrapToken);
     if (!nativeFetch) nativeFetch = globalThis.fetch.bind(globalThis);

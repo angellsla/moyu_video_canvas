@@ -105,7 +105,8 @@ export function listLocalSharingResources() {
 }
 
 export function addLanSharingCatalogAsset(catalogId: string, resourceId: string) {
-    return http.post<{ asset: LanSharingAsset }>(`${BASE_PATH}/catalogs/${encodeURIComponent(catalogId)}/assets`, { resourceId });
+    // Hashing and copying media can outlast the ordinary JSON-request deadline.
+    return http.post<{ asset: LanSharingAsset }>(`${BASE_PATH}/catalogs/${encodeURIComponent(catalogId)}/assets`, { resourceId }, { timeout: 30 * 60_000 });
 }
 
 export function getLanSharingCatalogAssetStatuses(catalogId: string) {
@@ -120,8 +121,8 @@ export function importLanSharingCatalogAsset(catalogId: string, input: {
     name: string;
     mimeType: string;
     size: number;
-}) {
-    return http.post<{ resource: RemoteResource }>(`${BASE_PATH}/catalogs/${encodeURIComponent(catalogId)}/assets/import`, input);
+}, signal?: AbortSignal) {
+    return http.post<{ resource: RemoteResource; asset: LanSharingAsset }>(`${BASE_PATH}/catalogs/${encodeURIComponent(catalogId)}/assets/import`, input, { timeout: 30 * 60_000, signal });
 }
 
 export type LanSharingCatalogUpdate = {

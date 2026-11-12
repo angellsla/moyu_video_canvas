@@ -4,7 +4,7 @@ import { Archive, ExternalLink, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { nanoid } from "nanoid";
 import { useNavigate } from "react-router";
 
-import { ensureSharedCanvasCatalog, makePortableSharedCanvasContent, prepareSharedCanvasLocalAssetValues, createSharedCanvasLocalAssetResolver } from "@/services/lan-collaboration-assets";
+import { ensureSharedCanvasCatalog, makePortableSharedCanvasContent, getSharedCanvasLocalAssetBindings, queueSharedCanvasAssetRetries, createSharedCanvasLocalAssetResolver } from "@/services/lan-collaboration-assets";
 import {
     createLanCollaborationCanvas,
     deleteLanCollaborationCanvas,
@@ -130,8 +130,8 @@ export function LanCollaborationLibrary({ projects }: { projects: CanvasProject[
             return;
         }
         setBusy(`open:${room.id}`);
+        const doc = createCollaborativeCanvasDocument();
         try {
-            const doc = createCollaborativeCanvasDocument();
             let cursor = "";
             for (;;) {
                 const page = await getLanCollaborationCanvasUpdates(room.id, cursor);
@@ -141,15 +141,17 @@ export function LanCollaborationLibrary({ projects }: { projects: CanvasProject[
             }
             const portable = readPortableSharedCanvasContent(doc);
             const hashes = extractHashes(portable);
-            const bindings = await prepareSharedCanvasLocalAssetValues(room.assetCatalogId, hashes);
+            const bindings = await getSharedCanvasLocalAssetBindings(room.assetCatalogId);
+            // Opening the graph must not wait for offline holders or large files.
+            // The live canvas verifies mappings and projects each arriving file.
+            await queueSharedCanvasAssetRetries(room.assetCatalogId, hashes);
             const content = restoreLocalSharedCanvasContent(portable, createSharedCanvasLocalAssetResolver(bindings));
             const localId = await saveLocalRoom(room, content);
-            doc.destroy();
-            await flushCanvasStore();
             navigate(`/canvas/${localId}`);
         } catch (error) {
             message.error(error instanceof Error ? error.message : "协作画布打开失败");
         } finally {
+            doc.destroy();
             setBusy("");
         }
     };

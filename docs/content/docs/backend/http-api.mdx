@@ -194,6 +194,10 @@ MiniMax speech 的 OpenAI 音频兼容目录通过 `audioOptions` 提供官方�
 
 `POST /lan-sharing/catalogs/:catalogId/assets` 接收当前用户拥有的本地 `resourceId`，读取本地资源、计算 SHA-256 并建立本机清单映射；`POST /lan-sharing/catalogs/:catalogId/assets/import` 接收 `{peerId,address,port,contentHash,name,mimeType,size}`，后端与受信任 peer 建立指纹固定 TLS 连接，流式接收内容并核对长度与 SHA-256，再通过现有资源服务创建接收端自己的本地资源记录。不受信任的对端返回 403、对端资产缺失返回 404、连接或内容校验失败返回 502。清单记录不携带发送端资源 ID 或路径；清单存在不代表任何 peer 当前在线或持有该资产，来源离线或没有本地映射时导入会失败。
 
+导入成功的信封 `data` 包含 `{resource,asset}`：`resource` 是本机资源，`asset` 是已通过内容校验的接收端清单声明，包含 `entryId`、`contentHash`、`name`、`mimeType`、`size`、`createdBy`、`createdAt` 及媒体属性。`createdBy` 为接收设备指纹，`entryId` 按清单、接收设备与内容哈希确定，重复导入和缺失文件恢复时保持稳定。前端直接将该声明写入 Yjs 并持久化待发更新，不再重复登记、重新计算文件哈希。文件落盘后若清单发布失败，本机文件继续可用，声明留在持久队列中重试，不重复向其他设备下载同一文件。浏览器资源映射缺失或过期时，前端先从本机 `/assets/status` 恢复映射并检查文件，再尝试远端持有者。
+
+本机登记或可信设备传来的清单更新持久化后，关联画布的本机活动 WebSocket 收到 `{type:"asset-catalog",canvasId,catalogId}` 通知；仅匹配该清单且未删除的画布接收，重复更新不重复通知。客户端立即补读清单并拉取缺失素材，解决画布引用先于素材清单到达时等待轮询的问题；通知到达时若已有查询在途，会在查询结束后补查。通知只加速就绪，不代替持久日志、重试队列和文件校验。
+
 `GET /lan-sharing/catalogs/:catalogId/assets/status` 返回当前桌面工作区在该清单中的本机映射状态 `{assets:[{contentHash,resourceId,availability,checkedAt}]}`，`availability` 为 `present`、`missing` 或 `unknown`，未检查时 `checkedAt` 为 `null`。桌面应用启动时检查本机文件，随后每 5 分钟巡检一次，与共享服务开关无关；确认文件缺失才标为 `missing`，临时读取故障保留 `unknown`，不会删除清单条目或资源记录。`present` 只证明巡检时文件存在，不是每次都重新计算 SHA-256，也不保证其他设备仍持有文件。共享清单中 `createdBy` 仅表示发布该条目的设备声明，不是对端文件实时可用的证明。
 
 ### 素材与操作
@@ -311,6 +315,8 @@ Windows 的运行地址描述文件位于用户目录的 `.beeftv/runtime/`，�
 标准 OpenAI Images 配置中的 `gpt-image-2` 默认质量为 `low`，设置面板保留低、中、高三个选项；旧内置配置中的自动质量迁移为低质量。任务提交时，image2 的空值、`auto` 和 `any` 明确发送为 `low`，用户选择的中、高质量及 1K/2K/4K 尺寸保持原值。GPT Image 2.5 的默认质量与完整质量选项不变，工作流参数不受此规则影响。
 
 ## 任务诊断
+
+桌面 profile 另提供 `POST /runtime-logs/frontend`，仅接受具备启动令牌与 UI 引导令牌的本机桌面界面写入；每批最多 100 条，单次请求最多 256 KiB。界面事件批量写入程序运行目录的 `Logs/frontend-YYYY-MM-DD.log`，Go 服务、HTTP 请求、后台任务阶段和运行状态写入 `Logs/backend-YYYY-MM-DD.log`。应用启动和每分钟清理早于 30 天的日志；程序目录不可写时回退到桌面数据目录。写入会过滤凭据、配对码、URL 查询参数、提示词、请求输入和文件路径。
 
 `POST /diagnostics/environment` 接收 `repair` 布尔值，检查当前工作区的存储、剩余空间、媒体工具、可选模型和代理配置。`repair=true` 只重建缺失的固定临时目录；已有文件、符号链接和项目均保留。接口不接受路径或命令，沿用工作区身份和桌面信任校验。导出的 ZIP 增加 `context/environment.json`，浏览器能力作为固定布尔字段写入 `context/runtime.json`。详细状态和适用范围见 [环境自检](./environment-check)。
 

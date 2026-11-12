@@ -24,13 +24,13 @@ test("Kling capability repair preserves profile defaults and explicit canvas aud
     }
 });
 
-test("Wan uses shared protocol and supported reference limits across reloads", () => {
+test("Wan preserves the selected protocol and supported reference limits across reloads", () => {
     const model = "wan3.0-video";
     const channel = createModelChannel({id: "newapi", baseUrl: "https://newapi.example.test", models: [model], modelProfiles: [{model, capability: "video", protocol: "openai-videos"}]});
     let config = {...defaultConfig, channels: [channel]};
     for (let i = 0; i < 2; i++) {
         config = normalizeConfigSnapshot({config}).config;
-        expect(resolveModelRequestConfig(config, `newapi::${model}`).interfaceType).toBe("newapi-channel-2");
+        expect(resolveModelRequestConfig(config, `newapi::${model}`).interfaceType).toBe("openai-videos");
         const refs = modelCapabilityConfigFor(config, `newapi::${model}`).video!.references;
         expect([refs.maxImages, refs.maxVideos, refs.maxAudios]).toEqual([1, 0, 0]);
     }
@@ -87,4 +87,15 @@ test("custom channel profiles take their capability from the configured protocol
     const config = normalizeConfigSnapshot({config: {...defaultConfig, channels: [channel]}}).config;
     const profile = config.channels[0]!.modelProfiles!.find((item) => item.model === "clip-x")!;
     expect(profile).toMatchObject({capability: "video", protocol: "newapi-channel-2"});
+});
+
+test("Sistinelove Seedance protocol enables multimodal references with version limits", () => {
+    const seedance20 = defaultModelCapabilityConfig("sistinelove-seedance-video", "seedance-2.0-gz").video!;
+    expect([seedance20.references.maxImages, seedance20.references.maxVideos, seedance20.references.maxAudios]).toEqual([9, 3, 3]);
+    expect(seedance20.operations).toContain("reference_to_video");
+    expect(seedance20.generateAudio.supported).toBe(true);
+
+    const seedance25 = defaultModelCapabilityConfig("sistinelove-seedance-video", "seedance-2.5-gz").video!;
+    expect([seedance25.references.maxImages, seedance25.references.maxVideos, seedance25.references.maxAudios]).toEqual([30, 10, 10]);
+    expect(seedance25.duration.max).toBe(30);
 });

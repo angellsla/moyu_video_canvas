@@ -22,6 +22,8 @@ backend\cmd\desktop\build\bin\VideoCanvas.exe
 
 这个变量只改变数据目录，不改变应用的本地工作区和无登录行为。官方插件仍然从可执行文件旁边的 `plugin-packages\` 加载，不跟数据目录走。
 
+桌面端运行日志按天保存在程序目录的 `Logs/`：`frontend-YYYY-MM-DD.log` 记录界面诊断与任务状态，`backend-YYYY-MM-DD.log` 记录 Go 服务状态、HTTP 异常与任务阶段；每次启动及运行中都会清理 30 天前的日志。安装位置不可写时，日志回退到桌面数据目录下的 `Logs/`。写入前会过滤配对码、令牌、密钥、URL 查询、提示词和本机文件路径。日志是本机排障信息，不应作为任务数据库或长期审计记录。
+
 ## 开发与构建
 
 统一浏览器预览与 Wails dev（共用 `web/src`、Vite `3000` 和本地 Go API `8080`）：

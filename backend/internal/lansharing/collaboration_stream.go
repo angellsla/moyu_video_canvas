@@ -681,6 +681,24 @@ func (h *collaborationHub) broadcastUpdate(canvasID, originNodeID, update string
 	h.broadcast(canvasID, map[string]any{"type": "update", "canvasId": canvasID, "originNodeId": originNodeID, "updateBase64": update})
 }
 
+// A graph update may arrive before its asset catalog. Wake only local editors
+// of matching rooms after the catalog is durable; polling remains the fallback.
+func (m *Manager) notifyCollaborationCatalogUpdate(ctx context.Context, catalogID string) {
+	active := m.collaborationHub.activeRooms()
+	if len(active) == 0 {
+		return
+	}
+	var rooms []string
+	if err := m.db.WithContext(ctx).Model(&model.LANCollaborationCanvas{}).
+		Where("asset_catalog_id = ? AND id IN ? AND deleted_at IS NULL", catalogID, active).
+		Pluck("id", &rooms).Error; err != nil {
+		return
+	}
+	for _, canvasID := range rooms {
+		m.collaborationHub.broadcast(canvasID, map[string]string{"type": "asset-catalog", "canvasId": canvasID, "catalogId": catalogID})
+	}
+}
+
 func (h *collaborationHub) broadcastPresence(canvasID, peerID string, state json.RawMessage) {
 	encoded, err := json.Marshal(collaborationPresenceFrame{
 		Type: "presence", CanvasID: canvasID, PeerID: peerID, State: append(json.RawMessage(nil), state...), ExpiresAt: time.Now().UTC().Add(30 * time.Second),

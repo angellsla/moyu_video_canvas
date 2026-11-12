@@ -36,7 +36,7 @@ test("concurrent task creation preserves explicit W3C context and binds each tas
     expect(events.find(event => event.taskId === "task-B")).toMatchObject({ traceId: traceB, canvasId: "canvas-B", clientOperationId: "op-B" });
 });
 
-test("old-scope responses are discarded and diagnostic endpoints do not record their own export", async () => {
+test("old-scope responses are discarded and diagnostic ingestion does not record itself", async () => {
     setDiagnosticUserScope("trace-before-switch");
     let complete!: () => void;
     apiClient.defaults.adapter = config => new Promise(resolve => { complete = () => resolve({ config, status: 200, statusText: "OK", headers: {}, data: { code: 0, data: {} } }); });
@@ -45,6 +45,7 @@ test("old-scope responses are discarded and diagnostic endpoints do not record t
     expect(getClientDiagnosticEvents()).toEqual([]);
     apiClient.defaults.adapter = async config => ({ config, status: 200, statusText: "OK", headers: {}, data: { code: 0, data: {} } });
     await http.post("/diagnostics/preview", { description: "private" });
+    await http.post("/runtime-logs/frontend", { entries: [] });
     expect(getClientDiagnosticEvents()).toEqual([]);
 });
 

@@ -16,6 +16,7 @@ import (
 	"infinite-canvas/backend/internal/bootstrap"
 	"infinite-canvas/backend/internal/desktopstorage"
 	"infinite-canvas/backend/internal/model"
+	"infinite-canvas/backend/internal/runtimelog"
 
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -39,6 +40,7 @@ type DesktopApp struct {
 	wailsCtx                context.Context
 	chooseSavePath          func(ctx context.Context, fileName string) (string, error)
 	copyOwnedMedia          func(resourceID, destPath string) error
+	runtimeLogger           *runtimelog.Logger
 }
 
 // Wails reflects every field type reachable from a bound object. Keeping the
@@ -60,8 +62,12 @@ type desktopAssetHandler struct {
 	app *DesktopApp
 }
 
-func newDesktopApp(dataDir string) *DesktopApp {
-	return &DesktopApp{dataDir: dataDir}
+func newDesktopApp(dataDir string, loggers ...*runtimelog.Logger) *DesktopApp {
+	app := &DesktopApp{dataDir: dataDir}
+	if len(loggers) > 0 {
+		app.runtimeLogger = loggers[0]
+	}
+	return app
 }
 
 func (a *DesktopApp) start(ctx context.Context) error {
@@ -73,7 +79,7 @@ func (a *DesktopApp) start(ctx context.Context) error {
 	if a.runtime() != nil {
 		return nil
 	}
-	runtime, err := openDesktopRuntime(ctx, a.dataDir)
+	runtime, err := openDesktopRuntime(ctx, a.dataDir, a.runtimeLogger)
 	if err != nil {
 		return err
 	}
@@ -83,10 +89,14 @@ func (a *DesktopApp) start(ctx context.Context) error {
 	return nil
 }
 
-func openDesktopRuntime(ctx context.Context, dataDir string) (*bootstrap.Runtime, error) {
+func openDesktopRuntime(ctx context.Context, dataDir string, loggers ...*runtimelog.Logger) (*bootstrap.Runtime, error) {
 	listenAddr := strings.TrimSpace(os.Getenv("CANVAS_DESKTOP_BACKEND_ADDR"))
 	if listenAddr == "" {
 		listenAddr = "127.0.0.1:0"
+	}
+	var runtimeLogger *runtimelog.Logger
+	if len(loggers) > 0 {
+		runtimeLogger = loggers[0]
 	}
 	runtime, err := bootstrap.Open(ctx, bootstrap.Config{
 		Profile:         bootstrap.ProfileDesktop,
@@ -96,6 +106,7 @@ func openDesktopRuntime(ctx context.Context, dataDir string) (*bootstrap.Runtime
 		LaunchToken:     strings.TrimSpace(os.Getenv("CANVAS_DESKTOP_LAUNCH_TOKEN")),
 		AutoMigrate:     true,
 		ShutdownTimeout: 10 * time.Minute,
+		RuntimeLogger:   runtimeLogger,
 	})
 	if err != nil {
 		return nil, err

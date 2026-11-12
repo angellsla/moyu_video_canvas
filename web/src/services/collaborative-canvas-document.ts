@@ -97,6 +97,16 @@ function isLocalMediaReference(value: string) {
     return /^(?:data:|blob:|resource:)/i.test(value) || RESOURCE_FILE_URL.test(value);
 }
 
+function isLocalUploadField(key: string, record: Record<string, unknown>) {
+    return key === "fileUpload" || key === "fileUploadProgress" || (key === "errorDetails" && Boolean(record.fileUpload));
+}
+
+function stripLocalUploadState(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map(stripLocalUploadState);
+    if (!isRecord(value)) return value;
+    return Object.fromEntries(Object.entries(value).filter(([key]) => !isLocalUploadField(key, value)).map(([key, item]) => [key, stripLocalUploadState(item)]));
+}
+
 function replaceWithPortableAssetReferences(value: unknown, path: string[], resolveHash: SharedCanvasAssetHashResolver, mediaAssetPaths: Set<string>): unknown {
     if (Array.isArray(value)) {
         return value.map((item, index) => replaceWithPortableAssetReferences(item, [...path, String(index)], resolveHash, mediaAssetPaths));
@@ -104,6 +114,7 @@ function replaceWithPortableAssetReferences(value: unknown, path: string[], reso
     if (!value || typeof value !== "object") return value;
     const result: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value)) {
+        if (isLocalUploadField(key, value as Record<string, unknown>)) continue;
         if (ASSET_REFERENCE_FIELDS.has(key as SharedCanvasAssetField) && typeof item === "string") {
             const field = key as SharedCanvasAssetField;
             const referencePath = [...path, key];
@@ -133,6 +144,8 @@ function replaceWithLocalAssetReferences(value: unknown, path: string[], resolve
     if (!value || typeof value !== "object") return value;
     const result: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value)) {
+        // Older peers may still publish upload UI state. It belongs to that device.
+        if (isLocalUploadField(key, value as Record<string, unknown>)) continue;
         if (ASSET_REFERENCE_FIELDS.has(key as SharedCanvasAssetField) && isAssetReference(item)) {
             const localValue = resolveLocalValue({ field: item.localField, contentHash: item.contentHash, path: [...path, key] });
             if (localValue) result[key] = localValue;
@@ -181,6 +194,34 @@ export function collectSharedCanvasAssetReferences(content: SharedCanvasContent)
 
 export function restoreLocalSharedCanvasContent(content: PortableSharedCanvasContent, resolveLocalValue: SharedCanvasLocalAssetResolver): SharedCanvasContent {
     return replaceWithLocalAssetReferences(content, [], resolveLocalValue) as SharedCanvasContent;
+}
+
+// Keep only this device's pending media and upload UI while projecting remote
+// edits. Match arrays by entity ID; a remote replacement or deletion wins.
+export function retainLocalSharedCanvasAssets(next: SharedCanvasContent, before: PortableSharedCanvasContent, local: SharedCanvasContent, portable: PortableSharedCanvasContent): SharedCanvasContent {
+    const match = (items: unknown, item: unknown, index: number) => {
+        if (!Array.isArray(items)) return undefined;
+        const id = isRecord(item) ? item.id : undefined;
+        return id === undefined ? items[index] : items.find((value) => isRecord(value) && value.id === id);
+    };
+    const visit = (value: unknown, prior: unknown, previousLocal: unknown, shared: unknown): unknown => {
+        if (Array.isArray(value)) return value.map((item, index) => visit(item, match(prior, item, index), match(previousLocal, item, index), match(shared, item, index)));
+        if (!isRecord(value) || !isRecord(previousLocal)) return value;
+        const old = isRecord(prior) ? prior : {};
+        const current = isRecord(shared) ? shared : {};
+        const result: Record<string, unknown> = { ...value };
+        for (const [key, item] of Object.entries(previousLocal)) {
+            if (isLocalUploadField(key, previousLocal)) {
+                if (item !== undefined) result[key] = item;
+            } else if (ASSET_REFERENCE_FIELDS.has(key as SharedCanvasAssetField) && typeof item === "string"
+                && (key === "storageKey" || key === "resourceId" || isLocalMediaReference(item))
+                && old[key] === undefined && current[key] === undefined) {
+                result[key] = item;
+            } else if (key in result) result[key] = visit(result[key], old[key], item, current[key]);
+        }
+        return result;
+    };
+    return visit(next, before, local, portable) as SharedCanvasContent;
 }
 
 // A missing local file projects as an absent field. Editing its node must not
@@ -477,6 +518,31 @@ export function applyCollaborativeCanvasLocalChanges(doc: Y.Doc, before: Portabl
                 applyLocalEntityChanges(entityMap(timeline, TIMELINE_CLIPS), orderArray(timeline, TIMELINE_CLIP_ORDER), (previous.clips || []) as Entity[], (next.clips || []) as Entity[]);
             }
         }
+    });
+}
+
+// Explicit history restoration may revive tombstones. Ordinary stale edits
+// still use applyCollaborativeCanvasLocalChanges and never resurrect deletions.
+export function restoreCollaborativeCanvasVersion(doc: Y.Doc, content: PortableSharedCanvasContent) {
+    content = stripLocalUploadState(content) as PortableSharedCanvasContent;
+    doc.transact(() => {
+        const root = getRoot(doc);
+        const revive = (map: Y.Map<unknown>, entities: PortableValue[]) => {
+            for (const entity of entities) {
+                if (!isRecord(entity) || !("id" in entity) || typeof entity.id !== "string") continue;
+                const record = map.get(entity.id);
+                if (record instanceof Y.Map && record.get(DELETED) === true) record.set(DELETED, false);
+            }
+        };
+        revive(entityMap(root, NODES), content.nodes);
+        revive(entityMap(root, CONNECTIONS), content.connections);
+        revive(entityMap(root, DIRECTOR_SCENES), content.directorScenes);
+        if (isRecord(content.timeline) && "tracks" in content.timeline && "clips" in content.timeline) {
+            const timeline = getTimeline(root);
+            revive(entityMap(timeline, TIMELINE_TRACKS), (content.timeline.tracks || []) as PortableValue[]);
+            revive(entityMap(timeline, TIMELINE_CLIPS), (content.timeline.clips || []) as PortableValue[]);
+        }
+        writeSharedCanvasContent(doc, content);
     });
 }
 

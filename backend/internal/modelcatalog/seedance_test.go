@@ -78,6 +78,29 @@ func TestSeedanceDefaultCapabilityFollowsDocumentedLimits(t *testing.T) {
 	}
 }
 
+func TestSistineloveSeedanceProtocolEnablesImageVideoAndAudioReferences(t *testing.T) {
+	for _, tc := range []struct {
+		model                  string
+		images, videos, audios int
+		maxDuration            int
+	}{
+		{model: "seedance-2.0-gz", images: 9, videos: 3, audios: 3, maxDuration: 15},
+		{model: "seedance-2.5-gz", images: 30, videos: 10, audios: 10, maxDuration: 30},
+	} {
+		video := DefaultModelCapabilityConfigForModel("sistinelove-seedance-video", tc.model).Video
+		refs := video.References
+		if refs.MaxImages != tc.images || refs.MaxVideos != tc.videos || refs.MaxAudios != tc.audios {
+			t.Fatalf("%s reference counts = %d/%d/%d", tc.model, refs.MaxImages, refs.MaxVideos, refs.MaxAudios)
+		}
+		if refs.MaxVideoDuration != tc.maxDuration || refs.MaxAudioDuration != tc.maxDuration || refs.MaxVideoBytes != 200*1024*1024 || refs.MaxAudioBytes != 15*1024*1024 {
+			t.Fatalf("%s reference limits = %+v", tc.model, refs)
+		}
+		if video.Duration.Max != tc.maxDuration || !slices.Contains(video.Operations, "reference_to_video") || !video.GenerateAudio.Supported || !video.Watermark.Supported {
+			t.Fatalf("%s capability = %+v", tc.model, video)
+		}
+	}
+}
+
 func seedanceVideoTaskInput(protocol, modelName, seconds string) TaskInput {
 	return TaskInput{Config: TaskConfig{InterfaceType: protocol, Model: modelName, VideoSeconds: seconds}}
 }

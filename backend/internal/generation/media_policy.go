@@ -8,7 +8,7 @@ import (
 )
 
 func MediaHydrationPolicyFor(ctx context.Context, input Input) MediaHydrationPolicy {
-	if input.Config.InterfaceType == "full-video" {
+	if input.Config.InterfaceType == "full-video" || usesSistineloveUpload(input) {
 		return MediaHydrationPolicy{KeepLocal: true}
 	}
 	policy := MediaHydrationPolicy{PreferURL: PrefersMediaURLs(input.Config.InterfaceType, input)}

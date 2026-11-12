@@ -341,6 +341,7 @@ export function buildImageGenerationMetadata(type: CanvasImageGenerationType, co
         size: config.size,
         quality: config.quality,
         transparentBackground: config.transparentBackground,
+        midjourneyParams: config.midjourneyParams,
         seedreamMode: config.seedreamMode,
         seedreamMaxImages: config.seedreamMaxImages,
         seedreamOutputFormat: config.seedreamOutputFormat,

@@ -1,0 +1,6 @@
+{
+  "protocol": "sistinelove-seedance-video",
+  "generationOrigin": "https://video.sistinelove.cn",
+  "mediaOrigin": "https://img.sistinelove.cn",
+  "modelPattern": "seedance|^sd[-_]?2([.\\-]|$)"
+}
