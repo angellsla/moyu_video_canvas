@@ -6,6 +6,19 @@ import (
 	"testing"
 )
 
+func TestOpenAIVideosReadsGatewayMetadataReceipts(t *testing.T) {
+	a := officialPackageAdapter(t, "openai-videos"+PluginPackageExtension, "newapi")
+	for _, body := range []string{
+		`{"id":"original","status":"in_progress","metadata":{"generation_status":"completed","url":"https://media.example/original.mp4"}}`,
+		`{"data":{"id":"original","status":"completed","metadata":{"url":"https://media.example/original.mp4"}}}`,
+	} {
+		state, err := a.ParsePoll(context.Background(), PollContext{TaskID: "original"}, []byte(body))
+		if err != nil || state.TaskID != "original" || state.Status != StatusSucceeded || state.Result == nil || len(state.Result.Videos) != 1 || state.Result.Videos[0].URL != "https://media.example/original.mp4" {
+			t.Fatalf("gateway receipt lost: state=%+v err=%v", state, err)
+		}
+	}
+}
+
 // 维护升级必须继续识别旧回执；同一个协议 ID 不能代替这些回归。
 func TestVideoUpgradeReadsLegacyReceipts(t *testing.T) {
 	for _, id := range []string{"luma-dream-machine", "runway-video"} {

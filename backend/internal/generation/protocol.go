@@ -140,7 +140,11 @@ func RunProtocolAdapterTaskWithPolicy(ctx context.Context, input Input, adapter 
 		if err != nil {
 			return VideoPollOutcome{}, err
 		}
-		if state.TaskID != "" {
+		if input.Mode == "video" {
+			if err := validateVideoPollIdentity(taskID, state.TaskID); err != nil {
+				return VideoPollOutcome{}, err
+			}
+		} else if state.TaskID != "" {
 			taskID = state.TaskID
 		}
 		switch state.Status {
@@ -190,6 +194,9 @@ func QueryProtocolAdapterVideoTask(ctx context.Context, input Input, adapter pro
 	}
 	state, err := adapter.ParsePoll(ctx, pollContext, body)
 	if err != nil {
+		return nil, "", err
+	}
+	if err := validateVideoPollIdentity(taskID, state.TaskID); err != nil {
 		return nil, "", err
 	}
 	providerStatus := string(state.Status)
@@ -1114,8 +1121,8 @@ func queryProtocolVideoSource(ctx context.Context, input Input, adapter protocol
 	if err != nil {
 		return VideoResultSource{}, err
 	}
-	if returnedID := strings.TrimSpace(state.TaskID); returnedID != "" && returnedID != strings.TrimSpace(taskID) {
-		return VideoResultSource{}, errors.New("查询结果与原视频任务不一致，已停止取回")
+	if err := validateVideoPollIdentity(taskID, state.TaskID); err != nil {
+		return VideoResultSource{}, err
 	}
 	if state.Status == protocol.StatusFailed || state.Status == protocol.StatusCancelled {
 		return VideoResultSource{}, ProtocolResultError(state.Message, taskID, body)

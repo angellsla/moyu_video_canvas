@@ -49,7 +49,7 @@ func findProviderProgress(value any, depth int) (int, bool) {
 				if normalizeProviderProgressKey(key) != wantedKey {
 					continue
 				}
-				if progress, ok := normalizeProviderProgressValue(candidate); ok {
+				if progress, ok := normalizeProviderProgressValue(candidate, wantedKey != "progress" && wantedKey != "completion"); ok {
 					return progress, true
 				}
 			}
@@ -74,7 +74,7 @@ func findProviderProgress(value any, depth int) (int, bool) {
 	return 0, false
 }
 
-func normalizeProviderProgressValue(value any) (int, bool) {
+func normalizeProviderProgressValue(value any, percentField bool) (int, bool) {
 	var number float64
 	explicitPercent := false
 	switch current := value.(type) {
@@ -98,7 +98,9 @@ func normalizeProviderProgressValue(value any) (int, bool) {
 	if math.IsNaN(number) || math.IsInf(number, 0) || number < 0 || number > 100 {
 		return 0, false
 	}
-	if !explicitPercent && number > 0 && number < 1 {
+	// Fields named percent/percentage already declare their unit. Only
+	// unitless progress/completion may represent a fractional ratio.
+	if !percentField && !explicitPercent && number > 0 && number < 1 {
 		number *= 100
 	}
 	return int(math.Round(number)), true

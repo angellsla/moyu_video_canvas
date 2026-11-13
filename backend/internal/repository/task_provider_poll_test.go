@@ -80,3 +80,27 @@ func TestUpdateTaskProviderProgressIsMonotonic(t *testing.T) {
 }
 
 func ptrTime(value time.Time) *time.Time { return &value }
+
+func TestProviderProgressPreservesVideoDownloadStage(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:provider-progress-download?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Task{}); err != nil {
+		t.Fatal(err)
+	}
+	task := model.Task{ID: "downloading", UserID: "user", Type: "canvas_video", Status: model.TaskStatusRunning, Stage: "正在取回生成结果", Progress: 90}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := New(db).UpdateTaskProviderProgress(task.ID, 100); err != nil {
+		t.Fatal(err)
+	}
+	var stored model.Task
+	if err := db.First(&stored, "id = ?", task.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Stage != task.Stage || stored.Progress != 100 || stored.Status != model.TaskStatusRunning {
+		t.Fatalf("renewal changed download lifecycle: stage=%q progress=%d status=%s", stored.Stage, stored.Progress, stored.Status)
+	}
+}

@@ -421,7 +421,9 @@ func taskLeaseWriter(db *gorm.DB, owner string) *gorm.DB {
 func (r *Repository) UpdateTaskProviderProgress(id string, progress int) error {
 	progress = max(0, min(100, progress))
 	return r.db.Model(&model.Task{}).Where("id = ? AND status = ?", id, model.TaskStatusRunning).Updates(map[string]any{
-		"stage":      "上游生成中",
+		// Refreshing an expired media URL polls the original task during
+		// download; that receipt must not move the UI back to generation.
+		"stage":      gorm.Expr("CASE WHEN stage = ? THEN stage ELSE ? END", "正在取回生成结果", "上游生成中"),
 		"progress":   gorm.Expr("CASE WHEN progress < ? THEN ? ELSE progress END", progress, progress),
 		"updated_at": time.Now(),
 	}).Error

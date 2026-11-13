@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 
 import { apiClient } from "@/services/api/request";
 import { waitForGenerationTask, type GenerationTask } from "@/services/api/task-center";
@@ -73,4 +73,48 @@ test("result retrieval polls every 500ms, while generation keeps its normal inte
         restore();
     }
     expect(delays).toEqual([2000, 500, 500]);
+});
+
+test("a video still running after 32 minutes remains observed until the backend settles it", async () => {
+    const seen: Array<unknown> = [];
+    const restore = queue([{ type: "canvas_video", status: "running" }, { type: "canvas_video", status: "succeeded" }], seen);
+    let now = 1_000;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+        const task = await waitForGenerationTask(taskId, { intervalMs: 1, onTaskUpdate: () => { now += 40 * 60 * 1000; } });
+        expect(task.status).toBe("succeeded");
+        expect(seen).toHaveLength(2);
+    } finally {
+        clock.mockRestore();
+        restore();
+    }
+});
+
+test("an explicit observer deadline still stops waiting for a video", async () => {
+    const seen: Array<unknown> = [];
+    const restore = queue([{ type: "canvas_video", status: "running" }], seen);
+    let now = 1_000;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+        await expect(waitForGenerationTask(taskId, { intervalMs: 1, timeoutMs: 100, onTaskUpdate: () => { now += 200; } })).rejects.toThrow("超时");
+        expect(seen).toHaveLength(1);
+    } finally {
+        clock.mockRestore();
+        restore();
+    }
+});
+
+test("aborting video observation between a reply and the next delay stops immediately", async () => {
+    const seen: Array<unknown> = [];
+    const restore = queue([{ type: "canvas_video", status: "running" }], seen);
+    const controller = new AbortController();
+    const timer = spyOn(window, "setTimeout");
+    try {
+        await expect(waitForGenerationTask(taskId, { signal: controller.signal, intervalMs: 1, onTaskUpdate: () => controller.abort() })).rejects.toThrow("Aborted");
+        expect(seen).toHaveLength(1);
+        expect(timer).not.toHaveBeenCalled();
+    } finally {
+        timer.mockRestore();
+        restore();
+    }
 });

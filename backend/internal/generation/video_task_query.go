@@ -8,6 +8,14 @@ import (
 	"strings"
 )
 
+// Polling, manual retrieval and URL renewal must retain the submitted identity.
+func validateVideoPollIdentity(taskID, returnedID string) error {
+	if returnedID = strings.TrimSpace(returnedID); returnedID != "" && returnedID != strings.TrimSpace(taskID) {
+		return errors.New("查询结果与原视频任务不一致，已停止取回")
+	}
+	return nil
+}
+
 // ValidateVideoTaskState checks every task envelope before exposing its result.
 // Providers without a task ID in their status reply remain supported.
 func ValidateVideoTaskState(taskID string, state map[string]interface{}) (map[string]interface{}, error) {

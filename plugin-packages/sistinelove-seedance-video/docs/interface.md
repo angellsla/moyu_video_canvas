@@ -70,10 +70,13 @@
 | 映射位置 | 上游路径或转换表达式 |
 | --- | --- |
 | `response.taskId` | `{"$coalesce":[{"$ref":"response.id"},{"$ref":"response.task_id"},{"$ref":"response.data.id"},{"$ref":"response.data.task_id"},{"$ref":"taskId"}]}` |
-| `response.status` | `{"$coalesce":[{"$ref":"response.status"},{"$ref":"response.state"},{"$ref":"response.data.status"},"pending"]}` |
-| `response.message` | `{"$coalesce":[{"$ref":"response.error.message"},{"$ref":"response.message"},{"$ref":"response.fail_reason"}]}` |
-| `response.videos` | `{"$coalesce":[{"$ref":"response.video_url"},{"$ref":"response.url"},{"$ref":"response.data.video_url"},{"$ref":"response.data.url"},{"$ref":"response.output.url"}]}` |
+| `response.status` | `{"$coalesce":[{"$ref":"response.metadata.generation_status"},{"$ref":"response.metadata.generationStatus"},{"$ref":"response.data.metadata.generation_status"},{"$ref":"response.data.metadata.generationStatus"},{"$ref":"response.status"},{"$ref":"response.state"},{"$ref":"response.data.status"},{"$ref":"response.data.state"},"pending"]}` |
+| `response.message` | `{"$coalesce":[{"$ref":"response.error.message"},{"$ref":"response.data.error.message"},{"$ref":"response.metadata.error.message"},{"$ref":"response.data.metadata.error.message"},{"$ref":"response.message"},{"$ref":"response.data.message"},{"$ref":"response.fail_reason"},{"$ref":"response.data.fail_reason"}]}` |
+| `response.videos` | `{"$coalesce":[{"$ref":"response.metadata.url"},{"$ref":"response.data.metadata.url"},{"$ref":"response.video_url"},{"$ref":"response.url"},{"$ref":"response.data.video_url"},{"$ref":"response.data.url"},{"$ref":"response.output.url"}]}` |
 | `response.errorPaths[0]` | `"error.code"` |
+| `response.errorPaths[1]` | `"data.error.code"` |
+| `response.errorPaths[2]` | `"metadata.error.code"` |
+| `response.errorPaths[3]` | `"data.metadata.error.code"` |
 | `response.resultEphemeral` | `true` |
 
 ## 响应与错误
@@ -329,6 +332,18 @@
           "status": {
             "$coalesce": [
               {
+                "$ref": "response.metadata.generation_status"
+              },
+              {
+                "$ref": "response.metadata.generationStatus"
+              },
+              {
+                "$ref": "response.data.metadata.generation_status"
+              },
+              {
+                "$ref": "response.data.metadata.generationStatus"
+              },
+              {
                 "$ref": "response.status"
               },
               {
@@ -336,6 +351,9 @@
               },
               {
                 "$ref": "response.data.status"
+              },
+              {
+                "$ref": "response.data.state"
               },
               "pending"
             ]
@@ -346,15 +364,36 @@
                 "$ref": "response.error.message"
               },
               {
+                "$ref": "response.data.error.message"
+              },
+              {
+                "$ref": "response.metadata.error.message"
+              },
+              {
+                "$ref": "response.data.metadata.error.message"
+              },
+              {
                 "$ref": "response.message"
               },
               {
+                "$ref": "response.data.message"
+              },
+              {
                 "$ref": "response.fail_reason"
+              },
+              {
+                "$ref": "response.data.fail_reason"
               }
             ]
           },
           "videos": {
             "$coalesce": [
+              {
+                "$ref": "response.metadata.url"
+              },
+              {
+                "$ref": "response.data.metadata.url"
+              },
               {
                 "$ref": "response.video_url"
               },
@@ -373,7 +412,10 @@
             ]
           },
           "errorPaths": [
-            "error.code"
+            "error.code",
+            "data.error.code",
+            "metadata.error.code",
+            "data.metadata.error.code"
           ],
           "resultEphemeral": true
         }

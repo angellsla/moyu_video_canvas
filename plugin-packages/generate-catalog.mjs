@@ -639,14 +639,24 @@ add({
   result: { method: "GET", path: "/v1/videos/{{taskId}}/content", headers: { Accept: "video/mp4" } },
   response: asyncResponse("video", {
     taskId: coalesce(ref("response.id"), ref("response.task_id"), ref("response.data.id"), ref("response.data.task_id"), ref("taskId")),
-    videos: coalesce(ref("response.video_url"), ref("response.url"), ref("response.data.video_url"), ref("response.data.url"), ref("response.output.url"))
+    status: coalesce(ref("response.metadata.generation_status"), ref("response.metadata.generationStatus"), ref("response.data.metadata.generation_status"), ref("response.data.metadata.generationStatus"), ref("response.status"), ref("response.state"), ref("response.data.status"), ref("response.data.state"), "pending"),
+    videos: coalesce(ref("response.metadata.url"), ref("response.data.metadata.url"), ref("response.video_url"), ref("response.url"), ref("response.data.video_url"), ref("response.data.url"), ref("response.output.url")),
+    message: coalesce(ref("response.error.message"), ref("response.data.error.message"), ref("response.metadata.error.message"), ref("response.data.metadata.error.message"), ref("response.message"), ref("response.data.message"), ref("response.fail_reason"), ref("response.data.fail_reason")),
+    errorPaths: ["error.code", "data.error.code", "metadata.error.code", "data.metadata.error.code"]
   }),
   notes: "按提供的 Seedance 网关合同发送 JSON 字符串数组。桌面后端先把所有图片、视频和音频参考素材分别以 multipart file 上传到 https://img.sistinelove.cn/img_up，并用 img_id 请求 /q 获取 img_url，全部素材就绪后才提交生成。此上传行为仅适用于 video.sistinelove.cn 的 Seedance 线路或明确选择该专属协议的渠道。",
 });
 
 add({
   id: "openai-videos", providerId: "newapi", name: "OpenAI Videos / Sora", vendor: "OpenAI", capability: "video",
+  version: "2.0.1",
   baseUrl: "https://api.openai.com", auth: bearer, params: videoParams, requiresPublicMediaUrls: false,
+  validations: [
+    { assert: { $lte: [len(ref("request.images")), 1] }, message: "当前 OpenAI Videos / Sora 协议最多支持一张参考图。请移除多余图片，或按服务商文档选择支持多图的请求协议。" },
+    { assert: eq(len(ref("request.videos")), 0), message: "当前 OpenAI Videos / Sora 协议不支持参考视频，请选择支持该素材的请求协议。" },
+    { assert: eq(len(ref("request.audios")), 0), message: "当前 OpenAI Videos / Sora 协议不支持参考音频，请选择支持该素材的请求协议。" },
+    { assert: eq(len(filter(ref("request.images"), "media", { $in: [ref("media.role"), ["mask", "last_frame"]] })), 0), message: "当前 OpenAI Videos / Sora 协议不支持尾帧或蒙版，请选择支持该素材的请求协议。" },
+  ],
   create: {
     method: "POST", path: "/v1/videos", contentType: "multipart/form-data",
     body: {
@@ -659,7 +669,11 @@ add({
   poll: { method: "GET", path: "/v1/videos/{{taskId}}" },
   cancel: { method: "DELETE", path: "/v1/videos/{{taskId}}" },
   result: { method: "GET", path: "/v1/videos/{{taskId}}/content", headers: { Accept: "video/mp4" } },
-  response: asyncResponse("video", { videos: coalesce(ref("response.url"), ref("response.video_url"), ref("response.output.url")), errorPaths: ["error.code"], messagePaths: ["error.message"] })
+  response: asyncResponse("video", {
+    status: coalesce(ref("response.metadata.generation_status"), ref("response.metadata.generationStatus"), ref("response.data.metadata.generation_status"), ref("response.data.metadata.generationStatus"), ref("response.status"), ref("response.state"), ref("response.data.status"), "pending"),
+    videos: coalesce(ref("response.metadata.url"), ref("response.data.metadata.url"), ref("response.url"), ref("response.video_url"), ref("response.data.url"), ref("response.data.video_url"), ref("response.output.url")),
+    errorPaths: ["error.code"], messagePaths: ["error.message"]
+  })
 });
 
 add({

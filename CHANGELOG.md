@@ -4,6 +4,12 @@ All notable public changes to the desktop workspace are documented in this file.
 
 ## Unreleased
 
+## v1.0.14
+
+- 修复后端视频任务仍在运行时，前端在 32 分钟提前报超时的问题；默认持续观察后端终态，保留主动取消与显式观察时限，并清理轮询等待的取消监听器。
+- 修复 Seedance 专属协议和 OpenAI 兼容视频协议遗漏嵌套生成状态和结果地址的问题；优先从 `metadata.url` 取回视频，避免已有直链时仍走内容中转端点；自动轮询、手动取回与链接刷新统一校验原任务 ID，避免接收其他任务的结果。
+- 修复百分比字段的小数值被误当成比例放大的问题；取回过程中刷新链接时保持下载阶段，生成进度达到 100% 仍等待任务成功和文件取回。
+
 ## v1.0.13
 
 - 为 `video.sistinelove.cn` Seedance 视频模型增加专属 JSON 协议与素材上传：图片、视频、音频逐项以 multipart 上传到 `img.sistinelove.cn/img_up`，通过 `/q` 校验 `img_id` 并获取链接后再提交生成；最多 3 路并发、限制远程源为公网 HTTPS、设置文件大小上限，失败时不提交生成请求。
