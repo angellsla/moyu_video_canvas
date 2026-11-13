@@ -4,6 +4,9 @@ All notable public changes to the desktop workspace are documented in this file.
 
 ## Unreleased
 
+## v1.0.15
+- 修复分辨率选择相关问题。
+
 ## v1.0.14
 
 - 修复后端视频任务仍在运行时，前端在 32 分钟提前报超时的问题；默认持续观察后端终态，保留主动取消与显式观察时限，并清理轮询等待的取消监听器。
