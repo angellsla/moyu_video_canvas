@@ -6,6 +6,7 @@ import zhCN from "antd/locale/zh_CN";
 
 import { WorkspaceBootstrapHydrator } from "@/components/workspace/workspace-bootstrap-hydrator";
 import { FullScreenLoader } from "@/components/ui/aceternity/full-screen-loader";
+import { GenerationSubmissionDelayBridge } from "@/components/layout/generation-submission-delay-bridge";
 import { appPathname } from "@/lib/app-routing";
 import { getAntThemeConfig } from "@/lib/app-theme";
 import { applySkinTheme } from "@/lib/skin-themes";
@@ -42,6 +43,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
     return (
         <ConfigProvider locale={zhCN} theme={getAntThemeConfig(dark, appearance.activeSkin)} modal={{ centered: true }}>
             <App message={{ duration: 3, maxCount: 3 }} notification={{ duration: 4.5, maxCount: 3, placement: "topRight" }}>
+                <GenerationSubmissionDelayBridge />
                 <QueryClientProvider client={appQueryClient}>
                     {isolateDevRepro ? (
                         children

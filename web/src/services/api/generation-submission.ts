@@ -1,5 +1,6 @@
 import { ApiError } from "./request";
 import type { CreateTaskInput, GenerationTask } from "./task-center";
+import { GenerationSubmissionCancelledError } from "@/services/generation-submission-delay";
 
 export class GenerationSubmissionUnknownError extends Error {
     readonly code = "submission_uncertain";
@@ -10,6 +11,7 @@ export class GenerationSubmissionUnknownError extends Error {
 }
 
 export function submissionAcceptanceUnknown(error: unknown): boolean {
+    if (error instanceof GenerationSubmissionCancelledError) return false;
     return !(error instanceof ApiError) || !error.status || error.status === 408 || error.status >= 500;
 }
 

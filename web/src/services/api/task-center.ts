@@ -7,6 +7,7 @@ import { getDiagnosticTraceId, recordDiagnosticEvent } from "@/services/diagnost
 import { recordTaskLifecycleTransition } from "@/services/diagnostics/task-lifecycle";
 import { publishGenerationDeliveryProgress } from "@/stores/use-generation-delivery-progress";
 import { beginTaskReferenceObservation, publishTaskReferenceProgress } from "@/services/task-reference-progress";
+import { generationModeForTaskInput, waitForGenerationSubmission, type DelayedGenerationMode } from "@/services/generation-submission-delay";
 
 export type { BackendEnvelope } from "@/services/api/request";
 
@@ -136,12 +137,20 @@ export type CreateTaskInput = {
 	logicalModelId?: string;
     input?: Record<string, unknown>;
 };
-export function createGenerationTask(input: CreateTaskInput, config?: HttpRequestConfig) {
-    return http.post<GenerationTask>("/tasks", input, config).then((task) => {
-        recordDiagnosticEvent({ level: "info", category: "task", code: "task_created", message: "任务已创建", taskId: task.id, projectId: task.projectId, canvasId: task.projectId, nodeId: task.clientContext?.nodeId, clientOperationId: task.clientOperationId, traceId: task.traceId || getDiagnosticTraceId(task.id) });
-        notifyCanvasTaskCreated(task);
-        return task;
-    });
+export type CreateGenerationTaskConfig = HttpRequestConfig & {
+    /** Internal guard used when a caller already completed the pre-submit delay. */
+    skipGenerationSubmissionDelay?: boolean;
+};
+
+export async function createGenerationTask(input: CreateTaskInput, config?: CreateGenerationTaskConfig) {
+    const mode = generationModeForTaskInput(input);
+    if (mode && !config?.skipGenerationSubmissionDelay) await waitForGenerationSubmission({ mode, model: input.model, signal: config?.signal as AbortSignal | undefined });
+    const requestConfig = config ? { ...config } : undefined;
+    if (requestConfig) delete requestConfig.skipGenerationSubmissionDelay;
+    const task = await http.post<GenerationTask>("/tasks", input, requestConfig);
+    recordDiagnosticEvent({ level: "info", category: "task", code: "task_created", message: "任务已创建", taskId: task.id, projectId: task.projectId, canvasId: task.projectId, nodeId: task.clientContext?.nodeId, clientOperationId: task.clientOperationId, traceId: task.traceId || getDiagnosticTraceId(task.id) });
+    notifyCanvasTaskCreated(task);
+    return task;
 }
 
 export type GenerationTaskPageRequest = {
@@ -332,7 +341,8 @@ export function queryTaskTextReplay(id: string, after = 0) {
     return http.get<TaskTextReplay>(`/tasks/${encodeURIComponent(id)}/text-deltas`, { params: { after } });
 }
 
-export function retryGenerationTask(id: string, options?: { signal?: AbortSignal; expectedScope?: CapturedUserScope }) {
+export async function retryGenerationTask(id: string, options?: { signal?: AbortSignal; expectedScope?: CapturedUserScope }, submission?: { mode: DelayedGenerationMode; model?: string }) {
+    if (submission) await waitForGenerationSubmission({ ...submission, signal: options?.signal });
     return http.post<GenerationTask>(`/tasks/${encodeURIComponent(id)}/retry`, undefined, options);
 }
 

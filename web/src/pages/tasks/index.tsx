@@ -16,6 +16,7 @@ import { portraitTaskRetryError } from "@/lib/seedance-portrait";
 import { formatTaskKind, operationOptions, statusLabel } from "@/lib/generation-task-display";
 import { buildVideoOperationPrompt } from "@/lib/prompts";
 import { backendProviderConfig, logicalModelIDForConfig } from "@/services/api/generation-task";
+import { GenerationSubmissionCancelledError, generationModeForTaskType } from "@/services/generation-submission-delay";
 
 import { createGenerationTask, formatTaskLog, listGenerationTasks, listTaskLogs, queryGenerationTask, recoverTask, retryGenerationTask, type CreateTaskInput, type GenerationTask, type TaskLog } from "@/services/api/task-center";
 import { canRecoverTaskOutcome, isRegenerateConfirm, isTaskRegenerateBlocked, readTaskOutcome, taskOutcomeCopy } from "@/lib/task-outcome";
@@ -369,14 +370,15 @@ export default function TasksPage() {
             if (warning && !(await new Promise<boolean>((resolve) => {
                 modal.confirm({ ...warning, centered: true, onOk: () => resolve(true), onCancel: () => resolve(false), afterClose: () => resolve(false) });
             }))) return;
-            const next = await retryGenerationTask(id);
+            const retryMode = generationModeForTaskType(detail.type);
+            const next = await retryGenerationTask(id, undefined, retryMode ? { mode: retryMode, model: detail.model } : undefined);
             setTasks((items) => items.map((item) => (item.id === id ? next : item)));
             setDetailTask((current) => (current?.id === id ? { ...current, ...next } : current));
             setStatusFilter("active");
             setPage(1);
             message.success("任务已重新入队");
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "操作失败");
+            if (!(error instanceof GenerationSubmissionCancelledError)) message.error(error instanceof Error ? error.message : "操作失败");
         } finally {
             setActingId("");
         }
@@ -453,7 +455,7 @@ export default function TasksPage() {
             form.resetFields();
             message.success("任务已创建");
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "任务创建失败");
+            if (!(error instanceof GenerationSubmissionCancelledError)) message.error(error instanceof Error ? error.message : "任务创建失败");
         } finally {
             setCreating(false);
         }

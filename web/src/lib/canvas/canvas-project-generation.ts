@@ -139,7 +139,7 @@ export async function runCanvasGenerationTaskToConsumer(
         runTask?: (options: Parameters<typeof runBackendCanvasGenerationTask>[0]) => ReturnType<typeof runBackendCanvasGenerationTask>;
         prepareTarget?: typeof persistCanvasGenerationTarget;
         isCurrent?: () => boolean;
-        onSubmission?: (metadata: Pick<CanvasNodeMetadata, "taskClientOperationId" | "generationSubmissionState" | "taskStage">) => void;
+        onSubmission?: (metadata: Pick<CanvasNodeMetadata, "taskClientOperationId" | "generationSubmissionState" | "taskStage" | "status">) => void;
     },
 ) {
     input = { ...input, clientOperationId: input.clientOperationId || createClientId() };
@@ -148,7 +148,12 @@ export async function runCanvasGenerationTaskToConsumer(
         const isCurrent = () => !input.signal?.aborted && userScopeMatches(expectedScope) && (dependencies.isCurrent ? dependencies.isCurrent() : true);
         const submission = (state: NonNullable<CanvasNodeMetadata["generationSubmissionState"]>) => {
             if (!isCurrent()) return;
-            const metadata = { taskClientOperationId: input.clientOperationId, generationSubmissionState: state, taskStage: state === "submitting" ? "正在提交生成任务" : state === "unknown" ? "提交结果待确认，请查询原任务" : undefined };
+            const metadata = {
+                taskClientOperationId: input.clientOperationId,
+                generationSubmissionState: state,
+                taskStage: state === "submitting" ? "正在提交生成任务" : state === "unknown" ? "提交结果待确认，请查询原任务" : undefined,
+                ...(state === "rejected" ? { status: "idle" as const } : {}),
+            };
             // Editor and store are one writer here. Advance the editor's live
             // refs before publishing the store change can trigger persistence.
             dependencies.onSubmission?.(metadata);
@@ -635,7 +640,7 @@ export function resetInterruptedGeneration(nodes: CanvasNodeData[]) {
 }
 
 export function isGenerationCanceled(error: unknown) {
-    return error instanceof Error && (error.message === "请求已取消" || error.name === "AbortError");
+    return error instanceof Error && (error.message === "请求已取消" || error.name === "AbortError" || error.name === "GenerationSubmissionCancelledError");
 }
 
 export function findRetrySourceNode(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]) {

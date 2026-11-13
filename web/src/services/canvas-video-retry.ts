@@ -10,7 +10,7 @@ export async function retryStoredCanvasVideo(taskId: string, signal: AbortSignal
     check();
     if (task.type !== "canvas_video") throw new Error("原任务不是画布视频任务，无法按原输入重试");
     if (task.status === "failed" || task.status === "cancelled") {
-        task = await dependencies.retryGenerationTask(taskId, { signal, expectedScope });
+        task = await dependencies.retryGenerationTask(taskId, { signal, expectedScope }, { mode: "video", model: task.model });
         check();
     }
     onTaskUpdate(task);
