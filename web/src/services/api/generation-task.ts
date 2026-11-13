@@ -19,6 +19,7 @@ import { assertVideoCapability } from "@/services/api/video-validation";
 import { ApiError } from "@/services/api/request";
 import { assertUserScope, captureUserScope } from "@/lib/user-scope-guard";
 import { isReferenceHTTPSLink, uploadReferenceLinks, type ResolveReferenceLinks, type ReferenceLinkRequest } from "./reference-link-replacement";
+import { waitForGenerationSubmission } from "@/services/generation-submission-delay";
 
 export { logicalModelIDForConfig };
 
@@ -56,6 +57,7 @@ type BackendGenerationTaskOptions = {
     retryContextsByBatchIndex?: Array<{ retryOf: string; attemptGroupId: string; clientOperationId: string }>;
     attemptGroupId?: string;
     expectedScope?: import("@/lib/user-scope-guard").CapturedUserScope;
+    skipGenerationSubmissionDelay?: boolean;
 };
 
 export type GenerationTaskDependencies = {
@@ -200,11 +202,16 @@ export async function runBackendGenerationTaskBatch(options: BackendGenerationTa
     if (options.retryContextsByBatchIndex && options.retryContextsByBatchIndex.length !== count) throw new Error("生成重试批次任务数量不匹配");
     const prepared = await prepareGenerationReferences(options);
     throwIfAborted(options.signal);
+    const delayedMode = options.mode === "image" || options.mode === "video" ? options.mode : undefined;
+    if (delayedMode && !options.skipGenerationSubmissionDelay) {
+        await waitForGenerationSubmission({ mode: delayedMode, model: options.config.model, signal: options.signal });
+    }
+    const batchOptions = delayedMode ? { ...options, skipGenerationSubmissionDelay: true } : options;
     return Promise.allSettled(
         Array.from({ length: count }, (_, batchIndex) =>
             createAndWaitGenerationTask(
                 {
-                    ...options,
+                    ...batchOptions,
                     metadata: { ...options.metadata, batchIndex, batchCount: count },
                 },
                 prepared,
@@ -229,7 +236,7 @@ function generationOperation(options: BackendGenerationTaskOptions) {
 }
 
 export function isGenerationTaskCancelled(error: unknown, signal?: AbortSignal) {
-    return signal?.aborted === true || (error instanceof Error && error.name === "AbortError");
+    return signal?.aborted === true || (error instanceof Error && (error.name === "AbortError" || error.name === "GenerationSubmissionCancelledError"));
 }
 
 function assertBackendRuntimeConfigured(config: AiConfig, mode: BackendGenerationMode) {
@@ -289,11 +296,17 @@ async function createBackendGenerationTask(options: BackendGenerationTaskOptions
     const expectedScope = options.expectedScope ?? captureUserScope();
     const operationId = options.clientOperationId || dependencies.createId();
     options = { ...options, clientOperationId: operationId };
+    let firstSubmission = true;
     const submit = () => {
         throwIfAborted(options.signal);
         assertUserScope(expectedScope);
         return submitGenerationCommand(backendGenerationTaskInput(options, prepared), operationId,
-            (input) => { assertUserScope(expectedScope); return dependencies.createTask(input, { expectedScope }); },
+            (input) => {
+                assertUserScope(expectedScope);
+                const skipGenerationSubmissionDelay = options.skipGenerationSubmissionDelay || !firstSubmission;
+                firstSubmission = false;
+                return dependencies.createTask(input, { expectedScope, signal: options.signal, skipGenerationSubmissionDelay });
+            },
             dependencies.findTask && options.projectId ? () => { assertUserScope(expectedScope); return dependencies.findTask!(operationId, options.projectId!); } : undefined,
             () => !options.signal?.aborted);
     };
