@@ -26,6 +26,7 @@ import (
 	"infinite-canvas/backend/internal/modelcatalog"
 	"infinite-canvas/backend/internal/outbound"
 	"infinite-canvas/backend/internal/protocol"
+	"infinite-canvas/backend/internal/providerpreset"
 
 	"github.com/google/uuid"
 	"github.com/volcengine/volc-sdk-golang/base"
@@ -293,6 +294,9 @@ func ProtocolRequestFromInput(input Input) protocol.GenerationRequest {
 	if input.Mode == "video" {
 		if declared := videoResolutionNameRequest(input.VideoCapability, resolution); declared != "" {
 			resolution = declared
+		}
+		if strings.TrimSpace(input.Config.InterfaceType) == providerpreset.SistineloveVideo.Protocol {
+			resolution = providerpreset.SistineloveSeedanceResolution(input.Config.Model)
 		}
 	}
 	aspectRatio := strings.TrimSpace(input.Config.Size)

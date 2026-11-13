@@ -5,6 +5,7 @@ import (
 
 	"infinite-canvas/backend/internal/kernel"
 	"infinite-canvas/backend/internal/model"
+	"infinite-canvas/backend/internal/providerpreset"
 )
 
 // ValidateConfiguredTask applies stored channel capability to a task. Workflow
@@ -39,6 +40,9 @@ func ValidateConfiguredTask(input TaskInput, lookup ChannelModelLookup) (TaskInp
 		normalized, normalizeErr := NormalizeModelCapabilityConfigForModel("video", input.Config.InterfaceType, input.Config.Model, profile)
 		if normalizeErr != nil || normalized == nil || normalized.Video == nil {
 			return input, kernel.BadAuthRequest("当前视频模型能力参数无效")
+		}
+		if strings.TrimSpace(input.Config.InterfaceType) == providerpreset.SistineloveVideo.Protocol {
+			applyFixedVideoResolution(&input, normalized.Video)
 		}
 		return input, validateVideoTask(normalized.Video, input)
 	}

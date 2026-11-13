@@ -60,6 +60,12 @@ Seedance 全能参考对这些明确绑定的媒体按首次引用排列，接�
 
 素材数值限制参考[官方 API](https://docs.volcengine.com/docs/ark/create-video-generation-task-api?lang=zh)和具体渠道的能力配置，不把提示词指南中的效果建议当成硬限制。
 
+## 墨羽 Seedance 线路的分辨率
+
+`sistinelove-seedance-video` 按模型名称选择分辨率：没有分辨率标记时使用 `720p`，带独立 `480`、`720`、`1080`、`1440`、`2160` 标记（可带 `p`）时使用对应档位，`2k`、`4k` 分别对应 `1440p`、`2160p`，大小写不影响识别。例如 `seedance-2.0-gz` 使用 `720p`，`seedance2.5-gz-1080` 使用 `1080p`。版本号、日期和时长不作为分辨率识别。
+
+界面能力、旧配置校验和最终 JSON 请求使用同一条模型规则，旧任务保存的 `vquality: "1080"` 不会覆盖未标档位模型的 `720p`。该规则仅适用于墨羽专属协议，其他供应商继续使用各自的分辨率合同。
+
 ## 异步报错与排查
 
 [官方任务说明](https://docs.volcengine.com/docs/ark/list-video-generation-tasks-api?lang=zh)指出，部分 2.5 任务要到消费阶段才返回参数错误。任务 ID 只证明创建成功，不证明所有参数均已通过模型校验。

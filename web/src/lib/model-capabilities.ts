@@ -3,6 +3,7 @@ import { imageModelContract } from "@/lib/model-image-contracts";
 import { seedreamFamily, seedreamImageCapability } from "@/lib/seedream-image";
 import type { ImageResolutionOption, ImageResolutionTier } from "@/lib/image-resolution-tiers";
 import { videoPromptLimits } from "@/lib/video-prompt-limits";
+import { sistineloveSeedanceResolution } from "@/lib/sistinelove-video";
 
 export type ModelCapabilityConfig = {
     version: number;
@@ -608,10 +609,9 @@ export function defaultModelCapabilityConfig(protocol?: ModelProtocol, model = "
         video.operations.push("reference_to_video");
         if (is25) {
             video.duration = { ...video.duration, max: 30 };
-            video.resolutions = ["480p", "720p"];
-        } else {
-            video.resolutions = ["480p", "720p", "1080p"];
         }
+        video.defaultResolution = sistineloveSeedanceResolution(model);
+        video.resolutions = [video.defaultResolution];
     }
     if (protocol === "volcengine-jimeng-video") {
         video.duration = { selection: "enum", values: [5, 10], default: 5 };
@@ -754,7 +754,12 @@ export function modelCapabilityConfigFor(
     // 官方文档写的下限只收紧、不放宽，所以旧安装里存下来的 1 秒输出、1.8 秒音频也会被改到文档值；
     // 管理员已经配得更严的数值保持不变。
     const alignDocumentedRouteLimits = (video: VideoCapabilityConfig | undefined) => {
-        if (!video || !isSeedance2Family(protocol, modelName)) return;
+        if (!video) return;
+        if (protocol === "sistinelove-seedance-video") {
+            video.defaultResolution = sistineloveSeedanceResolution(modelName);
+            video.resolutions = [video.defaultResolution];
+        }
+        if (!isSeedance2Family(protocol, modelName)) return;
         // Keep the documented pixel floor correction for every channel that
         // exposes the Seedance 2 contract; it is not a legacy-host behavior.
         if (video.references.minVideoPixels === 409600 && video.references.maxVideoPixels === 8295044) video.references.minVideoPixels = 407696;

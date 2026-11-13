@@ -101,6 +101,43 @@ func TestSistineloveSeedanceProtocolEnablesImageVideoAndAudioReferences(t *testi
 	}
 }
 
+func TestSistineloveResolutionUpgradesDefaultsAndSavedTasks(t *testing.T) {
+	const protocol = "sistinelove-seedance-video"
+	for _, tc := range []struct{ model, resolution string }{
+		{"seedance-2.0-gz", "720p"},
+		{"seedance-2.5-gz", "720p"},
+		{"seedance-2.0-480p", "480p"},
+		{"seedance2.5-gz-1080", "1080p"},
+	} {
+		t.Run(tc.model, func(t *testing.T) {
+			capability := DefaultModelCapabilityConfigForModel(protocol, tc.model)
+			if !slices.Equal(capability.Video.Resolutions, []string{tc.resolution}) || capability.Video.DefaultResolution != tc.resolution {
+				t.Fatalf("unexpected default resolution: %+v", capability.Video)
+			}
+			capability.Video.Resolutions = []string{"480p", "720p", "1080p"}
+			capability.Video.DefaultResolution = "1080p"
+			capability.Video.References.MaxImages = 7
+			capability.Video.Duration.Max = 12
+			normalized, err := NormalizeModelCapabilityConfigForModel("video", protocol, tc.model, capability)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(normalized.Video.Resolutions, []string{tc.resolution}) || normalized.Video.DefaultResolution != tc.resolution || normalized.Video.References.MaxImages != 7 || normalized.Video.Duration.Max != 12 {
+				t.Fatalf("saved capability was not upgraded selectively: %+v", normalized.Video)
+			}
+			input, err := ValidateConfiguredTask(TaskInput{Mode: "video", Prompt: "animate reference", Config: TaskConfig{
+				InterfaceType: protocol, Model: tc.model, VideoSeconds: "5", Size: "16:9", VQuality: "1080", CapabilityConfig: capability,
+			}}, nil)
+			if err != nil || input.Config.VQuality != tc.resolution {
+				t.Fatalf("saved task quality=%q, want %q; err=%v", input.Config.VQuality, tc.resolution, err)
+			}
+			if len(capability.Video.Resolutions) != 3 || capability.Video.DefaultResolution != "1080p" {
+				t.Fatal("normalization mutated the saved capability")
+			}
+		})
+	}
+}
+
 func seedanceVideoTaskInput(protocol, modelName, seconds string) TaskInput {
 	return TaskInput{Config: TaskConfig{InterfaceType: protocol, Model: modelName, VideoSeconds: seconds}}
 }

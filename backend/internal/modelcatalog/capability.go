@@ -215,13 +215,13 @@ func DefaultModelCapabilityConfigForModel(protocol string, modelName string) *Mo
 		video.References.MinVideoDuration, video.References.MinAudioDuration = 2, 2
 		video.GenerateAudio = VideoBooleanConfig{Supported: true, Default: true}
 		video.Watermark = VideoBooleanConfig{Supported: true, Default: false}
-		video.Resolutions = []string{"480p", "720p", "1080p"}
+		video.DefaultResolution = providerpreset.SistineloveSeedanceResolution(modelName)
+		video.Resolutions = []string{video.DefaultResolution}
 		if is25 {
 			video.References.MaxImages = 30
 			video.References.MaxVideos, video.References.MaxAudios = 10, 10
 			video.References.MaxVideoDuration, video.References.MaxAudioDuration = 30, 30
 			video.Duration.Max = 30
-			video.Resolutions = []string{"480p", "720p"}
 		}
 	case model.ChannelInterfaceVolcengineJiMengVideo:
 		video.Duration = VideoDurationConfig{Selection: "enum", Values: []int{5, 10}, Default: 5}
@@ -624,6 +624,12 @@ func applyModelSpecificVideoCapability(profile *VideoCapabilityConfig, protocol 
 	}
 	normalizedProtocol := strings.TrimSpace(protocol)
 	normalizedModel := strings.ToLower(strings.TrimSpace(modelName))
+	if normalizedProtocol == providerpreset.SistineloveVideo.Protocol {
+		value := *profile
+		value.DefaultResolution = providerpreset.SistineloveSeedanceResolution(modelName)
+		value.Resolutions = []string{value.DefaultResolution}
+		return &value
+	}
 	if model.ChannelInterfaceType(normalizedProtocol) != model.ChannelInterfaceAgnesVideo {
 		return profile
 	}
