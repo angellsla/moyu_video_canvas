@@ -2,5 +2,16 @@
   "protocol": "sistinelove-seedance-video",
   "generationOrigin": "https://video.sistinelove.cn",
   "mediaOrigin": "https://img.sistinelove.cn",
-  "modelPattern": "seedance|^sd[-_]?2([.\\-]|$)"
+  "modelPattern": "seedance|^sd[-_]?2([.\\-]|$)",
+  "defaultResolution": "720p",
+  "modelResolutionPattern": "(?:^|[^a-z0-9])(480p?|720p?|1080p?|1440p?|2160p?|2k|4k)(?:$|[^a-z0-9])",
+  "resolutionAliases": {
+    "480": "480p",
+    "720": "720p",
+    "1080": "1080p",
+    "1440": "1440p",
+    "2160": "2160p",
+    "2k": "1440p",
+    "4k": "2160p"
+  }
 }
