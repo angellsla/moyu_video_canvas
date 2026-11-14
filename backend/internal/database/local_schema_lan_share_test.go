@@ -128,10 +128,10 @@ func TestLANSharingMigrationFromV28PreservesOwnedResourcesAndLedger(t *testing.T
 	if err := db.Order("version").Find(&after).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(after) != len(before)+3 || !reflect.DeepEqual(before, after[:len(before)]) {
+	if len(after) != len(before)+4 || !reflect.DeepEqual(before, after[:len(before)]) {
 		t.Fatalf("existing migration ledger changed: before=%+v after=%+v", before, after)
 	}
-	if last := after[len(after)-1]; last.Version != 31 || last.Name != "lan-catalog-resource-availability" {
+	if last := after[len(after)-1]; last.Version != 32 || last.Name != "lan-equal-member-rooms" {
 		t.Fatalf("new migration identity = %+v", last)
 	}
 }
@@ -157,7 +157,7 @@ func TestLANResourceAvailabilityMigrationFromV30PreservesMappings(t *testing.T) 
 			t.Fatalf("v30 fixture retained %s: exists=%v err=%v", column, has, err)
 		}
 	}
-	if err := db.Where("version = ?", 31).Delete(&localSchemaMigration{}).Error; err != nil {
+	if err := db.Where("version >= ?", 31).Delete(&localSchemaMigration{}).Error; err != nil {
 		t.Fatal(err)
 	}
 	var before []localSchemaMigration
@@ -184,7 +184,7 @@ func TestLANResourceAvailabilityMigrationFromV30PreservesMappings(t *testing.T) 
 	if err := db.Order("version").Find(&after).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(after) != len(before)+1 || !reflect.DeepEqual(before, after[:len(before)]) || after[len(after)-1].Name != "lan-catalog-resource-availability" {
+	if len(after) != len(before)+2 || !reflect.DeepEqual(before, after[:len(before)]) || after[len(after)-2].Name != "lan-catalog-resource-availability" || after[len(after)-1].Name != "lan-equal-member-rooms" {
 		t.Fatalf("migration ledger changed: %+v", after)
 	}
 	if err := db.Exec("ALTER TABLE lan_catalog_resources DROP COLUMN checked_at").Error; err != nil {

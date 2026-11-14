@@ -48,13 +48,13 @@ func TestCatalogArrivalWakesCanvasOverLocalWebSocket(t *testing.T) {
 		t.Fatalf("initial presence: %v", err)
 	}
 	peer := httptest.NewUnstartedServer(receiver.peerHTTPHandler())
-	peer.TLS, err = receiver.identity.ServerTLSConfig(receiver.isTrusted)
+	peer.TLS, err = receiver.identity.ServerTLSConfig(receiver.isTrustedIdentity)
 	if err != nil {
 		t.Fatal(err)
 	}
 	peer.StartTLS()
 	defer peer.Close()
-	config, err := sender.identity.ClientTLSConfig(receiver.NodeID())
+	config, err := sender.identity.ClientTLSConfig(receiver.NodeID(), Fingerprint(receiver.identity.PublicKey()))
 	if err != nil {
 		t.Fatal(err)
 	}

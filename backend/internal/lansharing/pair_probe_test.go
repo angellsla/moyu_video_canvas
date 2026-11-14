@@ -34,13 +34,13 @@ func TestPairProbeResponseRequiresActiveCodeAndPrivateSource(t *testing.T) {
 		t.Fatalf("decode probe response: %v", err)
 	}
 	proof, err := base64.RawURLEncoding.DecodeString(reply.Proof)
-	if err != nil || reply.PeerID != peerID || reply.Port != 42123 || reply.Nonce != base64.RawURLEncoding.EncodeToString(nonce) || !hmac.Equal(proof, pairProbeProof("ONE-TIME", nonce, peerID, reply.Port)) {
+	if err != nil || reply.PeerID != peerID || reply.Port != 42123 || reply.Nonce != base64.RawURLEncoding.EncodeToString(nonce) || !hmac.Equal(proof, pairProbeProof("ONE-TIME", nonce, peerID, reply.Port, "")) {
 		t.Fatalf("invalid authenticated probe response: %#v, err=%v", reply, err)
 	}
-	if hmac.Equal(proof, pairProbeProof("ONE-TIME", nonce, peerID, 42124)) {
+	if hmac.Equal(proof, pairProbeProof("ONE-TIME", nonce, peerID, 42124, "")) {
 		t.Fatal("proof must bind the TLS port")
 	}
-	if hmac.Equal(proof, pairProbeProof("WRONG", nonce, peerID, reply.Port)) {
+	if hmac.Equal(proof, pairProbeProof("WRONG", nonce, peerID, reply.Port, "")) {
 		t.Fatal("proof must bind the pairing code")
 	}
 	for _, test := range []struct {
@@ -89,13 +89,13 @@ func TestDirectPairProbeRejectsProofForDifferentTLSIdentity(t *testing.T) {
 			http.Error(w, "invalid nonce", http.StatusBadRequest)
 			return
 		}
-		writeJSON(w, http.StatusOK, newPairProbeReply(nonce, otherIdentity.ID(), port, "ONE-TIME"))
+		writeJSON(w, http.StatusOK, newPairProbeReply(nonce, otherIdentity.ID(), port, "ONE-TIME", Fingerprint(otherIdentity.PublicKey())))
 	}))
 	server.TLS = &tls.Config{Certificates: []tls.Certificate{certificate}, ClientAuth: tls.RequireAnyClientCert}
 	server.StartTLS()
 	defer server.Close()
 	port = server.Listener.Addr().(*net.TCPAddr).Port
-	if _, err := queryPairEndpointTLS(context.Background(), clientIdentity, net.IPv4(127, 0, 0, 1), port, "ONE-TIME"); !errors.Is(err, ErrConflict) {
+	if _, _, err := queryPairEndpointTLS(context.Background(), clientIdentity, net.IPv4(127, 0, 0, 1), port, "ONE-TIME"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("proof for another TLS identity error = %v", err)
 	}
 }

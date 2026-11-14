@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -79,7 +80,9 @@ func TestLANAssetTwoDesktopRoundTrip(t *testing.T) {
 			t.Fatal(err)
 		}
 		server.Listener = listener
-		server.TLS, err = identity.ServerTLSConfig(func(id string) bool { return id == trusted })
+		server.TLS, err = identity.ServerTLSConfig(func(id string, key ed25519.PublicKey) bool {
+			return id == trusted && lansharing.Fingerprint(key) == trusted
+		})
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -123,7 +124,16 @@ func Open(_ context.Context, raw Config) (result *Runtime, openErr error) {
 			return nil, err
 		}
 	}
-	svc := app.NewLocal(repo, cfg.DataDir)
+	resourceDir := strings.TrimSpace(cfg.ResourceDir)
+	if resourceDir == "" {
+		resourceDir = filepath.Join(cfg.DataDir, "resources")
+	}
+	if err := os.MkdirAll(resourceDir, 0o750); err != nil {
+		cleanupDB()
+		return nil, fmt.Errorf("初始化本地素材目录: %w", err)
+	}
+	cfg.ResourceDir = resourceDir
+	svc := app.NewLocalWithResourceDir(repo, cfg.DataDir, resourceDir)
 	cleanupService := func() {
 		_ = svc.Close()
 		cleanupDB()
@@ -158,7 +168,12 @@ func Open(_ context.Context, raw Config) (result *Runtime, openErr error) {
 	scope := workspace.Context{ID: owner.ID, DataDir: cfg.DataDir}
 	var lanSharing *lansharing.Manager
 	if cfg.Profile == ProfileDesktop {
-		lanSharing, err = lansharing.NewManager(cfg.DataDir, db)
+		identity, identityErr := loadLANIdentity(cfg.DataDir)
+		if identityErr != nil {
+			cleanupService()
+			return nil, fmt.Errorf("初始化设备身份: %w", identityErr)
+		}
+		lanSharing, err = lansharing.NewManager(cfg.DataDir, db, identity)
 		if err != nil {
 			cleanupService()
 			return nil, fmt.Errorf("初始化局域网共享: %w", err)

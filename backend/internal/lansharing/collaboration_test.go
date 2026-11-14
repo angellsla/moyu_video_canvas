@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -129,7 +130,7 @@ func TestPeerCanOnlyReplicateItsOwnCanvasMetadata(t *testing.T) {
 			t.Fatal(marshalErr)
 		}
 		request := httptest.NewRequest(http.MethodPost, "/collaboration/canvases", strings.NewReader(string(body)))
-		request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{PublicKey: peerPublic}}}
+		request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{PublicKey: peerPublic, Subject: pkix.Name{CommonName: peerID}}}}
 		response := httptest.NewRecorder()
 		manager.peerHTTPHandler().ServeHTTP(response, request)
 		return response
@@ -250,7 +251,7 @@ func TestTwoTrustedManagersSyncWebSocketCatchUpAndRevocation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	firstTLS, err := first.identity.ServerTLSConfig(first.isTrusted)
+	firstTLS, err := first.identity.ServerTLSConfig(first.isTrustedIdentity)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +271,7 @@ func TestTwoTrustedManagersSyncWebSocketCatchUpAndRevocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	clientTLS, err := second.identity.ClientTLSConfig(first.NodeID())
+	clientTLS, err := second.clientTLSConfig(first.NodeID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +359,7 @@ func TestCreatorHubRelaysAcrossThreeDevicesWithoutMemberPairing(t *testing.T) {
 		server := httptest.NewUnstartedServer(manager.peerHTTPHandler())
 		_ = server.Listener.Close()
 		server.Listener = listener
-		server.TLS, err = manager.identity.ServerTLSConfig(manager.isTrusted)
+		server.TLS, err = manager.identity.ServerTLSConfig(manager.isTrustedIdentity)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -391,7 +392,7 @@ func TestCreatorHubRelaysAcrossThreeDevicesWithoutMemberPairing(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, member := range []*Manager{first, second} {
-		clientTLS, err := member.identity.ClientTLSConfig(creator.NodeID())
+		clientTLS, err := member.clientTLSConfig(creator.NodeID())
 		if err != nil {
 			t.Fatal(err)
 		}

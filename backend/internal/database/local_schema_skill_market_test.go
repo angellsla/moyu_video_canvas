@@ -63,7 +63,7 @@ func TestV20MarketReleaseMigrationPreservesVersionsAndLedger(t *testing.T) {
 	if err := db.Order("version").Find(&after).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(after) != len(before)+11 || !reflect.DeepEqual(before, after[:len(before)]) || after[len(before)].Version != 21 || after[len(before)].Name != "skill-market-release-metadata" || after[len(before)+4].Name != "reconcile-preview-assistant-schema" || after[len(before)+5].Name != "task-recovery-outcome" || after[len(before)+6].Name != "task-beefapi-settlement" || after[len(before)+7].Name != "managed-media-query-identity" || after[len(before)+8].Name != "lan-shared-resource-catalog" || after[len(before)+9].Name != "lan-collaboration-canvases" || after[len(before)+10].Name != "lan-catalog-resource-availability" {
+	if len(after) != len(before)+12 || !reflect.DeepEqual(before, after[:len(before)]) || after[len(before)].Version != 21 || after[len(before)].Name != "skill-market-release-metadata" || after[len(before)+4].Name != "reconcile-preview-assistant-schema" || after[len(before)+5].Name != "task-recovery-outcome" || after[len(before)+6].Name != "task-beefapi-settlement" || after[len(before)+7].Name != "managed-media-query-identity" || after[len(before)+8].Name != "lan-shared-resource-catalog" || after[len(before)+9].Name != "lan-collaboration-canvases" || after[len(before)+10].Name != "lan-catalog-resource-availability" || after[len(before)+11].Name != "lan-equal-member-rooms" {
 		t.Fatalf("migration ledger changed: %+v", after)
 	}
 	if err := db.Exec("ALTER TABLE skill_versions DROP COLUMN market_release_json").Error; err != nil {

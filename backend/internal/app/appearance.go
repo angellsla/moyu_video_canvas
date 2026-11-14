@@ -69,14 +69,14 @@ func (g appearanceAdminGate) AppendAudit(actor *model.User, action, targetType, 
 }
 
 type appearanceFiles struct {
-	dataDir string
+	resourceDir string
 }
 
 func (f appearanceFiles) Exists(objectKey string) bool {
-	if f.dataDir == "" {
+	if f.resourceDir == "" {
 		return false
 	}
-	info, err := os.Stat(filepath.Join(f.dataDir, "resources", filepath.FromSlash(objectKey)))
+	info, err := os.Stat(filepath.Join(f.resourceDir, filepath.FromSlash(objectKey)))
 	return err == nil && !info.IsDir()
 }
 
@@ -104,7 +104,7 @@ func (s *Service) AppearanceDomain() *appearance.Service {
 		s.appearance = appearance.New(appearance.Dependencies{
 			Settings:  s.repo,
 			Resources: s.repo,
-			Files:     appearanceFiles{dataDir: s.dataDir},
+			Files:     appearanceFiles{resourceDir: s.resourceDir},
 			Admin:     appearanceAdminGate{requireAdmin: s.RequireAdmin, appendAudit: s.appendAdminAudit},
 			Lock:      appearanceLock{svc: s},
 		})

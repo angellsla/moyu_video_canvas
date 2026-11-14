@@ -286,7 +286,11 @@ func newLANAssetHandlerFixture(t *testing.T) (*app.Service, *gorm.DB, *lansharin
 		t.Fatal(err)
 	}
 	service := app.NewLocal(repository.New(db), dataDir)
-	manager, err := lansharing.NewManager(dataDir, db)
+	identity, err := lansharing.LoadIdentity(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := lansharing.NewManager(dataDir, db, identity)
 	if err != nil {
 		t.Fatal(err)
 	}

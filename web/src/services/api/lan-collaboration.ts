@@ -8,6 +8,7 @@ export type LanCollaborationCanvas = {
     archived: boolean;
     updateCount: number;
     assetCatalogId?: string;
+    roomId?: string;
     createdAt: string;
     updatedAt: string;
     archivedAt?: string;
@@ -46,10 +47,11 @@ export function getLanCollaborationCanvases(signal?: AbortSignal) {
     return http.get<{ canvases: LanCollaborationCanvas[] }>(BASE_PATH, { signal });
 }
 
-export function createLanCollaborationCanvas(name: string, initialUpdate?: Uint8Array, assetCatalogId?: string) {
+export function createLanCollaborationCanvas(name: string, initialUpdate?: Uint8Array, assetCatalogId?: string, roomId?: string) {
     return http.post<{ canvas: LanCollaborationCanvas }>(BASE_PATH, {
         name,
         ...(assetCatalogId ? { assetCatalogId } : {}),
+        ...(roomId ? { roomId } : {}),
         ...(initialUpdate?.byteLength ? { initialUpdateBase64: encodeLanSharingUpdate(initialUpdate) } : {}),
     });
 }

@@ -17,7 +17,13 @@ type FileStore struct {
 }
 
 func NewFileStore(dataDir string) *FileStore {
-	return &FileStore{root: canonicalPath(filepath.Join(strings.TrimSpace(dataDir), "resources"))}
+	return NewFileStoreAt(filepath.Join(strings.TrimSpace(dataDir), "resources"))
+}
+
+// NewFileStoreAt creates a store rooted directly at resourceDir. The workspace
+// metadata and upload-session scratch may remain in a different directory.
+func NewFileStoreAt(resourceDir string) *FileStore {
+	return &FileStore{root: canonicalPath(strings.TrimSpace(resourceDir))}
 }
 
 func (s *FileStore) writeSpace() string {

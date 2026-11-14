@@ -10,6 +10,7 @@ import (
 
 	"infinite-canvas/backend/internal/app"
 	"infinite-canvas/backend/internal/lansharing"
+	"infinite-canvas/backend/internal/model"
 
 	"github.com/gin-gonic/gin"
 )
@@ -37,6 +38,23 @@ type lanSharingAPI interface {
 	AppendCollaborationCanvasUpdate(context.Context, string, []byte) (bool, error)
 	CreateCollaborationCanvasStreamTicket(context.Context, string) (string, error)
 	HandleCollaborationCanvasStream(http.ResponseWriter, *http.Request, string)
+}
+
+type lanRoomAPI interface {
+	Rooms(context.Context) ([]lansharing.RoomSummary, error)
+	CreateRoom(context.Context, string) (lansharing.RoomState, error)
+	DiscoverRooms(context.Context, string) ([]lansharing.RoomLocation, error)
+	RequestRoomJoin(context.Context, lansharing.RoomJoinInput) (model.LANRoomJoin, error)
+	RoomRequests(context.Context) ([]model.LANRoomJoin, error)
+	ApproveRoomJoin(context.Context, string, bool) (lansharing.RoomState, error)
+	RoomAction(context.Context, string, string, string) (lansharing.RoomState, error)
+}
+
+type roomCatalogAPI interface {
+	CreateRoomCatalog(context.Context, string, string) (lansharing.CatalogSummary, error)
+}
+type roomCanvasAPI interface {
+	CreateRoomCollaborationCanvas(context.Context, string, string, string, []byte) (lansharing.CollaborationCanvasSummary, error)
 }
 
 func RegisterLANSharingRoutes(api *gin.RouterGroup, _ *app.Service, manager lanSharingAPI) {
@@ -133,13 +151,25 @@ func RegisterLANSharingRoutes(api *gin.RouterGroup, _ *app.Service, manager lanS
 	})
 	routes.POST("/catalogs", func(c *gin.Context) {
 		var request struct {
-			Name string `json:"name"`
+			Name   string `json:"name"`
+			RoomID string `json:"roomId,omitempty"`
 		}
 		if err := c.ShouldBindJSON(&request); err != nil {
 			fail(c, http.StatusBadRequest, app.BadAuthRequest("清单名称无效"))
 			return
 		}
-		catalog, err := manager.CreateCatalog(c.Request.Context(), request.Name)
+		var catalog lansharing.CatalogSummary
+		var err error
+		if request.RoomID != "" {
+			roomManager, supported := manager.(roomCatalogAPI)
+			if !supported {
+				writeLANSharingError(c, lansharing.ErrInvalid)
+				return
+			}
+			catalog, err = roomManager.CreateRoomCatalog(c.Request.Context(), request.RoomID, request.Name)
+		} else {
+			catalog, err = manager.CreateCatalog(c.Request.Context(), request.Name)
+		}
 		if err != nil {
 			writeLANSharingError(c, err)
 			return
@@ -205,6 +235,7 @@ func RegisterLANSharingRoutes(api *gin.RouterGroup, _ *app.Service, manager lanS
 		var request struct {
 			Name                string `json:"name"`
 			AssetCatalogID      string `json:"assetCatalogId,omitempty"`
+			RoomID              string `json:"roomId,omitempty"`
 			InitialUpdateBase64 string `json:"initialUpdateBase64,omitempty"`
 		}
 		if err := bindStrictJSON(c, &request); err != nil {
@@ -220,7 +251,18 @@ func RegisterLANSharingRoutes(api *gin.RouterGroup, _ *app.Service, manager lanS
 				return
 			}
 		}
-		canvas, err := manager.CreateCollaborationCanvas(c.Request.Context(), request.Name, request.AssetCatalogID, initialUpdate)
+		var canvas lansharing.CollaborationCanvasSummary
+		var err error
+		if request.RoomID != "" {
+			roomManager, supported := manager.(roomCanvasAPI)
+			if !supported {
+				writeLANSharingError(c, lansharing.ErrInvalid)
+				return
+			}
+			canvas, err = roomManager.CreateRoomCollaborationCanvas(c.Request.Context(), request.RoomID, request.Name, request.AssetCatalogID, initialUpdate)
+		} else {
+			canvas, err = manager.CreateCollaborationCanvas(c.Request.Context(), request.Name, request.AssetCatalogID, initialUpdate)
+		}
 		if err != nil {
 			writeLANSharingError(c, err)
 			return
@@ -306,6 +348,91 @@ func RegisterLANSharingRoutes(api *gin.RouterGroup, _ *app.Service, manager lanS
 	api.GET("/lan-sharing/canvases/:canvasId/stream", func(c *gin.Context) {
 		manager.HandleCollaborationCanvasStream(c.Writer, c.Request, c.Param("canvasId"))
 	})
+	if roomManager, supported := manager.(lanRoomAPI); supported {
+		routes.GET("/rooms", func(c *gin.Context) {
+			rooms, err := roomManager.Rooms(c.Request.Context())
+			if err != nil {
+				writeLANSharingError(c, err)
+				return
+			}
+			ok(c, gin.H{"rooms": rooms})
+		})
+		routes.POST("/rooms", func(c *gin.Context) {
+			var body struct {
+				Name string `json:"name"`
+			}
+			if err := bindStrictJSON(c, &body); err != nil {
+				fail(c, http.StatusBadRequest, app.BadAuthRequest("房间名称无效"))
+				return
+			}
+			room, err := roomManager.CreateRoom(c.Request.Context(), body.Name)
+			if err != nil {
+				writeLANSharingError(c, err)
+				return
+			}
+			ok(c, gin.H{"room": room})
+		})
+		routes.GET("/rooms/discover", func(c *gin.Context) {
+			rooms, err := roomManager.DiscoverRooms(c.Request.Context(), strings.TrimSpace(c.Query("code")))
+			if err != nil {
+				writeLANSharingError(c, err)
+				return
+			}
+			ok(c, gin.H{"rooms": rooms})
+		})
+		routes.POST("/rooms/join", func(c *gin.Context) {
+			var input lansharing.RoomJoinInput
+			if err := bindStrictJSON(c, &input); err != nil {
+				fail(c, http.StatusBadRequest, app.BadAuthRequest("加入房间请求无效"))
+				return
+			}
+			request, err := roomManager.RequestRoomJoin(c.Request.Context(), input)
+			if err != nil {
+				writeLANSharingError(c, err)
+				return
+			}
+			ok(c, gin.H{"request": request})
+		})
+		routes.GET("/rooms/requests", func(c *gin.Context) {
+			requests, err := roomManager.RoomRequests(c.Request.Context())
+			if err != nil {
+				writeLANSharingError(c, err)
+				return
+			}
+			ok(c, gin.H{"requests": requests})
+		})
+		routes.POST("/rooms/requests/:requestId", func(c *gin.Context) {
+			var body struct {
+				Approve bool `json:"approve"`
+			}
+			if err := bindStrictJSON(c, &body); err != nil {
+				fail(c, http.StatusBadRequest, app.BadAuthRequest("房间申请决定无效"))
+				return
+			}
+			room, err := roomManager.ApproveRoomJoin(c.Request.Context(), c.Param("requestId"), body.Approve)
+			if err != nil {
+				writeLANSharingError(c, err)
+				return
+			}
+			ok(c, gin.H{"room": room})
+		})
+		routes.POST("/rooms/:roomId/actions", func(c *gin.Context) {
+			var body struct {
+				Kind   string `json:"kind"`
+				Target string `json:"target,omitempty"`
+			}
+			if err := bindStrictJSON(c, &body); err != nil {
+				fail(c, http.StatusBadRequest, app.BadAuthRequest("房间操作无效"))
+				return
+			}
+			room, err := roomManager.RoomAction(c.Request.Context(), c.Param("roomId"), body.Kind, body.Target)
+			if err != nil {
+				writeLANSharingError(c, err)
+				return
+			}
+			ok(c, gin.H{"room": room})
+		})
+	}
 }
 
 func writeLANSharingError(c *gin.Context, err error) {

@@ -12,6 +12,6 @@ ZIP 仍供便携使用和应用内更新。Windows/macOS 安装后可继续使�
 
 Windows 覆盖安装时如果提示旧程序文件夹被其他程序占用，请关闭正在使用该目录的终端或外部程序，再点击“重试”。仍然失败可以取消安装；如果提示原程序未能恢复，请保留提示中的备份文件夹，不要手动删除。每次安装的日志位于 `%LOCALAPPDATA%\墨羽Canvas\Installer\*.log`，可将本次日志交给支持人员，帮助确认失败的步骤和 Windows 错误码。日志包含本机安装路径，请只发给可信的支持人员。
 
-新安装的项目、素材、草稿和设置默认存放在独立的用户目录：Windows `%AppData%\MoyuCanvas`；macOS `~/Library/Application Support/MoyuCanvas`；Linux `~/.config/MoyuCanvas`（遵循 `XDG_CONFIG_HOME`）。已有工作区目录 `VideoCanvas` 或 `BeefTV` 会在新目录不存在时沿用，不会自动搬移。安装、覆盖安装和卸载不删除这些目录。Windows 的 WebView2 缓存 `%AppData%\VideoCanvas.exe` 也会保留。
+新安装的项目、草稿、数据库和设置默认存放在独立的用户目录：Windows `%AppData%\MoyuCanvas`；macOS `~/Library/Application Support/MoyuCanvas`；Linux `~/.config/MoyuCanvas`（遵循 `XDG_CONFIG_HOME`）。本地图片、视频、音频等素材默认放在该目录的 `resources` 子目录，也可在桌面端“存储设置”中迁移到其他磁盘；素材目录与数据库目录可分开。已有工作区目录 `VideoCanvas` 或 `BeefTV` 会在新目录不存在时沿用，不会自动搬移。安装、覆盖安装和卸载不删除这些目录。Windows 的 WebView2 缓存 `%AppData%\VideoCanvas.exe` 也会保留。
 
 如果曾通过 `CANVAS_DESKTOP_DATA_DIR` 或 `--data-dir` 指定目录，安装后仍需使用同一目录；不要把工作数据放进程序安装目录。安装包不会搬迁自定义目录，也不会自动找回已经丢失的文件。

@@ -129,7 +129,7 @@ func TestPeerFromEntryRequiresValidPrivatePeerDescriptor(t *testing.T) {
 		ServiceRecord: zeroconf.ServiceRecord{Instance: "BeefTV-room._beeftv-share._tcp.local."},
 		HostName:      "studio-workstation.local.",
 		Port:          44321,
-		Text:          []string{"id=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "version=1", "nickname=Studio Editor"},
+		Text:          []string{"id=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "version=" + protocol, "nickname=Studio Editor"},
 		AddrIPv4:      []net.IP{net.ParseIP("192.168.4.22"), net.ParseIP("8.8.8.8")},
 	}
 	peer, ok := peerFromEntry(entry)
@@ -142,7 +142,7 @@ func TestPeerFromEntryRequiresValidPrivatePeerDescriptor(t *testing.T) {
 	if peer.Name != "Studio Editor" {
 		t.Fatalf("peer name = %q, want advertised nickname", peer.Name)
 	}
-	entry.Text[1] = "version=2"
+	entry.Text[1] = "version=1"
 	if _, ok := peerFromEntry(entry); ok {
 		t.Fatal("unsupported protocol version was accepted")
 	}
@@ -151,7 +151,7 @@ func TestPeerFromEntryRequiresValidPrivatePeerDescriptor(t *testing.T) {
 func TestPeerFromEntryPreservesAddressesFromMultipleLANs(t *testing.T) {
 	entry := &zeroconf.ServiceEntry{
 		Port:     44321,
-		Text:     []string{"id=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "version=1"},
+		Text:     []string{"id=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "version=" + protocol},
 		AddrIPv4: []net.IP{net.ParseIP("192.168.4.22"), net.ParseIP("10.20.30.40"), net.ParseIP("169.254.1.5"), net.ParseIP("8.8.8.8")},
 	}
 	peer, ok := peerFromEntry(entry)
@@ -168,7 +168,7 @@ func TestPeerFromEntryFallsBackToHostAndNicknameFitsTXTRecord(t *testing.T) {
 		ServiceRecord: zeroconf.ServiceRecord{Instance: "BeefTV-room._beeftv-share._tcp.local."},
 		HostName:      "studio-workstation.local.",
 		Port:          44321,
-		Text:          []string{"id=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "version=1"},
+		Text:          []string{"id=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "version=" + protocol},
 		AddrIPv4:      []net.IP{net.ParseIP("192.168.4.22")},
 	}
 	peer, ok := peerFromEntry(entry)

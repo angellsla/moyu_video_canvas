@@ -75,7 +75,7 @@ paths:
     get:
       tags: [lan-sharing]
       summary: 读取本机局域网共享状态
-      description: 仅桌面配置注册此路由；返回稳定节点指纹、本机设备显示名称、运行状态、主监听地址、实际成功监听的私有 IPv4 地址、成功发布 mDNS 的地址及有效的一次性配对码。nickname 为空时为系统设备名称。mDNS 组播逐网卡发布，不会默认跨子网转发。
+      description: 仅桌面配置注册此路由；返回 SMBIOS UUID 的 SHA-256 设备 ID、本机设备显示名称、运行状态、主监听地址、实际成功监听的私有 IPv4 地址、成功发布 mDNS 的地址及有效的一次性配对码。公钥仍用于 TLS 密钥固定；nickname 为空时为系统设备名称。
       responses:
         "200": { description: 信封 data 为局域网共享状态，包含 nodeId、nickname、enabled、endpoint、endpoints、advertisedEndpoints、pairingCode 和 pairingCodeExpiresAt }
         "403": { description: 需要受信任的桌面界面 }
@@ -83,7 +83,7 @@ paths:
     put:
       tags: [lan-sharing]
       summary: 设置本机局域网设备名称
-      description: 名称只用于显示，不改变公钥指纹身份。空字符串会清除自定义名称并回退系统设备名称；运行中的 mDNS 广告立即更新。此字段独立于可信设备记录中的本地备注。
+      description: 名称只用于显示，不改变 SMBIOS UUID 派生的设备 ID。空字符串会清除自定义名称并回退系统设备名称；运行中的 mDNS 广告立即更新。此字段独立于可信设备记录中的本地备注。
       requestBody:
         required: true
         content:
@@ -174,6 +174,7 @@ paths:
               required: [name]
               properties:
                 name: { type: string, minLength: 1, maxLength: 120 }
+                roomId: { type: string, pattern: "^[a-f0-9]{64}$", description: 可选；设置后仅该团队成员可见和编辑 }
       responses:
         "200": { description: 信封 data.catalog 为新清单 }
         "400": { description: 清单名称无效 }
@@ -220,7 +221,7 @@ paths:
     get:
       tags: [lan-sharing]
       summary: 列出局域网协作画布
-      description: 返回已配对可信节点可见的协作房间；正文由独立 Yjs 文档表示，不使用个人画布的修订号或历史。
+      description: 返回当前设备是成员的协作画布；团队画布对所有成员平等开放管理，正文由独立 Yjs 文档表示，不使用个人画布的修订号或历史。
       responses:
         "200": { description: 信封 data.canvases 为协作画布摘要 }
         "403": { description: 需要受信任的桌面界面 }
@@ -238,6 +239,7 @@ paths:
               properties:
                 name: { type: string, minLength: 1, maxLength: 120 }
                 assetCatalogId: { type: string, description: 由协作画布引用素材使用的共享资源清单 ID }
+                roomId: { type: string, pattern: "^[a-f0-9]{64}$", description: 可选；团队内创建后所有成员平等管理 }
                 initialUpdateBase64: { type: string, format: byte, description: 可选的首个 Yjs 文档更新，解码后最多 4 MiB }
       responses:
         "200": { description: 信封 data.canvas 为新协作画布 }
@@ -352,6 +354,106 @@ paths:
       responses:
         "101": { description: WebSocket upgrade 成功 }
         "403": { description: 票据无效或已过期 }
+  /lan-sharing/rooms:
+    get:
+      tags: [lan-sharing]
+      summary: 列出本机已加入的团队房间
+      responses:
+        "200": { description: 信封 data.rooms 含 8 位发现码、成员公钥身份、活动提案和因果事件头 }
+    post:
+      tags: [lan-sharing]
+      summary: 创建平等成员团队
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 80 }
+      responses:
+        "200": { description: 返回新房间；8 位数字码仅供快速发现，不是权限凭据 }
+  /lan-sharing/rooms/discover:
+    get:
+      tags: [lan-sharing]
+      summary: 在局域网已发现设备上查询团队目录
+      parameters:
+        - in: query
+          name: code
+          schema: { type: string, pattern: "^[0-9]{8}$" }
+      responses:
+        "200": { description: 返回匹配的房间及可连接成员地址；相同数字码可对应多个内部房间 ID }
+  /lan-sharing/rooms/join:
+    post:
+      tags: [lan-sharing]
+      summary: 向一个房间成员提交签名加入申请
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [roomId, peerId, address, port]
+              properties:
+                roomId: { type: string, pattern: "^[a-f0-9]{64}$" }
+                peerId: { type: string, pattern: "^[a-f0-9]{64}$" }
+                address: { type: string, format: ipv4 }
+                port: { type: integer, minimum: 1, maximum: 65535 }
+      responses:
+        "200": { description: 信封 data.request 为待审批申请 }
+        "403": { description: 目标不是该房间成员 }
+  /lan-sharing/rooms/requests:
+    get:
+      tags: [lan-sharing]
+      summary: 列出待审批或本机发出的加入申请
+      responses:
+        "200": { description: 返回尚未过期的申请及状态 }
+  /lan-sharing/rooms/requests/{requestId}:
+    post:
+      tags: [lan-sharing]
+      summary: 批准或拒绝加入申请
+      parameters:
+        - in: path
+          name: requestId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [approve]
+              properties:
+                approve: { type: boolean }
+      responses:
+        "200": { description: 任一现有成员均可审批；批准会写入签名成员事件 }
+        "403": { description: 本机不是该房间成员 }
+  /lan-sharing/rooms/{roomId}/actions:
+    post:
+      tags: [lan-sharing]
+      summary: 自行离开或创建/投票成员移除及房间解散提案
+      description: 离开立即生效，但最后一名成员需解散房间；移除及解散以提案时成员为固定选民集合，需超过半数批准。成员公钥签署追加事件，离线副本重连后合并。
+      parameters:
+        - in: path
+          name: roomId
+          required: true
+          schema: { type: string, pattern: "^[a-f0-9]{64}$" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind]
+              properties:
+                kind: { type: string, enum: [leave, remove, dissolve, vote] }
+                target: { type: string, description: 移除的节点 ID 或投票的提案事件 ID }
+      responses:
+        "200": { description: 返回合并后的房间状态 }
+        "403": { description: 本机不是房间成员或不在提案选民集合中 }
+        "409": { description: 当前成员身份或提案状态已变化 }
   /lan-sharing/catalogs/{catalogId}/assets:
     post:
       tags: [lan-sharing]
@@ -413,7 +515,7 @@ paths:
     post:
       tags: [lan-sharing]
       summary: 从受信任 peer 直连导入资产到本地资源库
-      description: TLS 证书按节点指纹固定；字节流经 TCP 直传并在写入资源库前验证 SHA-256 和长度。
+      description: TLS 连接同时验证 SMBIOS 派生的设备 ID 和已配对公钥；字节流经 TCP 直传并在写入资源库前验证 SHA-256 和长度。
       parameters:
         - in: path
           name: catalogId

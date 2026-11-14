@@ -39,7 +39,9 @@ func TestPinnedMutualTLSRequiresTrustedEd25519Peer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	serverTLS, err := serverIdentity.ServerTLSConfig(func(peerID string) bool { return peerID == clientIdentity.ID() })
+	serverTLS, err := serverIdentity.ServerTLSConfig(func(peerID string, key ed25519.PublicKey) bool {
+		return peerID == clientIdentity.ID() && key.Equal(clientIdentity.PublicKey())
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +52,7 @@ func TestPinnedMutualTLSRequiresTrustedEd25519Peer(t *testing.T) {
 	server.StartTLS()
 	defer server.Close()
 
-	clientTLS, err := clientIdentity.ClientTLSConfig(serverIdentity.ID())
+	clientTLS, err := clientIdentity.ClientTLSConfig(serverIdentity.ID(), Fingerprint(serverIdentity.PublicKey()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +71,7 @@ func TestPinnedMutualTLSRequiresTrustedEd25519Peer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	untrustedTLS, err := untrustedIdentity.ClientTLSConfig(serverIdentity.ID())
+	untrustedTLS, err := untrustedIdentity.ClientTLSConfig(serverIdentity.ID(), Fingerprint(serverIdentity.PublicKey()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +79,7 @@ func TestPinnedMutualTLSRequiresTrustedEd25519Peer(t *testing.T) {
 	if _, err := untrusted.Get(server.URL); err == nil {
 		t.Fatal("untrusted client certificate was accepted")
 	}
-	if _, err := clientIdentity.ClientTLSConfig(strings.Repeat("0", sha256.Size*2)); err != nil {
+	if _, err := clientIdentity.ClientTLSConfig(strings.Repeat("0", sha256.Size*2), Fingerprint(serverIdentity.PublicKey())); err != nil {
 		t.Fatal(err)
 	}
 }

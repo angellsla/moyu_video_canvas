@@ -9,6 +9,9 @@ import (
 )
 
 func (s *Service) resourcesRoot() string {
+	if strings.TrimSpace(s.resourceDir) != "" {
+		return s.resourceDir
+	}
 	return filepath.Join(s.dataDir, "resources")
 }
 

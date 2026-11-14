@@ -34,23 +34,25 @@ type pairProbeRequest struct {
 }
 
 type pairProbeReply struct {
-	Kind    string `json:"kind"`
-	Service string `json:"service"`
-	Version string `json:"version"`
-	Nonce   string `json:"nonce"`
-	PeerID  string `json:"peerId"`
-	Port    int    `json:"port"`
-	Proof   string `json:"proof"`
+	Kind           string `json:"kind"`
+	Service        string `json:"service"`
+	Version        string `json:"version"`
+	Nonce          string `json:"nonce"`
+	PeerID         string `json:"peerId"`
+	Port           int    `json:"port"`
+	Proof          string `json:"proof"`
+	KeyFingerprint string `json:"keyFingerprint,omitempty"`
 }
 
-func pairProbeProof(code string, nonce []byte, peerID string, port int) []byte {
+func pairProbeProof(code string, nonce []byte, peerID string, port int, keyFingerprint string) []byte {
 	mac := hmac.New(sha256.New, []byte(code))
-	_, _ = mac.Write([]byte("beeftv-lan-pair-v1\x00"))
+	_, _ = mac.Write([]byte("beeftv-lan-pair-v2\x00"))
 	_, _ = mac.Write(nonce)
 	_, _ = mac.Write([]byte(peerID))
 	var encodedPort [2]byte
 	binary.BigEndian.PutUint16(encodedPort[:], uint16(port))
 	_, _ = mac.Write(encodedPort[:])
+	_, _ = mac.Write([]byte(keyFingerprint))
 	return mac.Sum(nil)
 }
 
@@ -59,11 +61,12 @@ func decodePairProbeNonce(encoded string) ([]byte, bool) {
 	return nonce, err == nil && len(nonce) == 16 && base64.RawURLEncoding.EncodeToString(nonce) == encoded
 }
 
-func newPairProbeReply(nonce []byte, peerID string, port int, code string) pairProbeReply {
+func newPairProbeReply(nonce []byte, peerID string, port int, code, keyFingerprint string) pairProbeReply {
 	return pairProbeReply{
 		Kind: pairProbeReplyKind, Service: serviceType, Version: protocol,
 		Nonce: base64.RawURLEncoding.EncodeToString(nonce), PeerID: peerID, Port: port,
-		Proof: base64.RawURLEncoding.EncodeToString(pairProbeProof(code, nonce, peerID, port)),
+		KeyFingerprint: keyFingerprint,
+		Proof:          base64.RawURLEncoding.EncodeToString(pairProbeProof(code, nonce, peerID, port, keyFingerprint)),
 	}
 }
 
@@ -76,7 +79,7 @@ func verifyPairProbeReply(packet []byte, nonce []byte, code string) (string, int
 		return "", 0, ErrInvalid
 	}
 	proof, err := base64.RawURLEncoding.DecodeString(reply.Proof)
-	if err != nil || !hmac.Equal(proof, pairProbeProof(code, nonce, reply.PeerID, reply.Port)) {
+	if err != nil || !hmac.Equal(proof, pairProbeProof(code, nonce, reply.PeerID, reply.Port, reply.KeyFingerprint)) {
 		return "", 0, ErrPairingCode
 	}
 	return reply.PeerID, reply.Port, nil
@@ -94,7 +97,7 @@ func pairProbeResponse(packet []byte, source *net.UDPAddr, peerID string, port i
 	if !ok {
 		return nil
 	}
-	reply, err := json.Marshal(newPairProbeReply(nonce, peerID, port, code))
+	reply, err := json.Marshal(newPairProbeReply(nonce, peerID, port, code, ""))
 	if err != nil || len(reply) > broadcastPacketLimit {
 		return nil
 	}
@@ -177,19 +180,19 @@ func queryPairEndpoint(ctx context.Context, address net.IP, discoveryPort int, c
 
 // The optional TCP port is probed without sending the code. A code-bound proof
 // must match the certificate seen on that TLS connection before /pair is sent.
-func queryPairEndpointTLS(ctx context.Context, identity *Identity, address net.IP, port int, code string) (string, error) {
+func queryPairEndpointTLS(ctx context.Context, identity *Identity, address net.IP, port int, code string) (string, string, error) {
 	if ctx == nil || identity == nil || address == nil || address.To4() == nil || port < 1 || port > 65535 || code == "" {
-		return "", ErrInvalid
+		return "", "", ErrInvalid
 	}
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
-		return "", err
+		return "", "", err
 	}
 	certificate, err := identity.TLSCertificate()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	var certificateID string
+	var certificateID, keyFingerprint string
 	transport := &http.Transport{TLSClientConfig: &tls.Config{
 		MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate}, InsecureSkipVerify: true,
 		VerifyConnection: func(state tls.ConnectionState) error {
@@ -200,7 +203,11 @@ func queryPairEndpointTLS(ctx context.Context, identity *Identity, address net.I
 			if !ok {
 				return ErrConflict
 			}
-			certificateID = Fingerprint(publicKey)
+			certificateID = certificateNodeID(state.PeerCertificates[0])
+			keyFingerprint = Fingerprint(publicKey)
+			if certificateID == "" {
+				return ErrConflict
+			}
 			return nil
 		},
 	}, ForceAttemptHTTP2: false}
@@ -209,35 +216,36 @@ func queryPairEndpointTLS(ctx context.Context, identity *Identity, address net.I
 	endpoint := "https://" + net.JoinHostPort(address.String(), fmt.Sprint(port)) + "/pair/probe?nonce=" + url.QueryEscape(base64.RawURLEncoding.EncodeToString(nonce[:]))
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	response, err := client.Do(request)
 	if err != nil {
 		if ctx.Err() != nil {
-			return "", ctx.Err()
+			return "", "", ctx.Err()
 		}
-		return "", fmt.Errorf("%w: %v", ErrPeerUnreachable, err)
+		return "", "", fmt.Errorf("%w: %v", ErrPeerUnreachable, err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusForbidden {
-		return "", ErrPairingCode
+		return "", "", ErrPairingCode
 	}
 	if response.StatusCode != http.StatusOK {
-		return "", ErrPeerUnreachable
+		return "", "", ErrPeerUnreachable
 	}
 	packet, err := io.ReadAll(io.LimitReader(response.Body, broadcastPacketLimit+1))
 	if err != nil {
-		return "", fmt.Errorf("%w: %v", ErrPeerUnreachable, err)
+		return "", "", fmt.Errorf("%w: %v", ErrPeerUnreachable, err)
 	}
 	peerID, proofPort, err := verifyPairProbeReply(packet, nonce[:], code)
 	if errors.Is(err, ErrInvalid) {
-		return "", ErrPeerUnreachable
+		return "", "", ErrPeerUnreachable
 	}
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	if peerID != certificateID || proofPort != port {
-		return "", ErrConflict
+	var reply pairProbeReply
+	if json.Unmarshal(packet, &reply) != nil || peerID != certificateID || proofPort != port || reply.KeyFingerprint != keyFingerprint {
+		return "", "", ErrConflict
 	}
-	return peerID, nil
+	return peerID, keyFingerprint, nil
 }

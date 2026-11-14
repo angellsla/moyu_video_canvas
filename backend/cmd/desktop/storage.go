@@ -188,6 +188,9 @@ func (a *DesktopApp) MigrateStorage(target string) (desktopstorage.Usage, error)
 	if err = desktopstorage.VerifySnapshot(target, files, false); err != nil {
 		return restore(err)
 	}
+	if err = rebaseMigratedAssetLocation(source, target); err != nil {
+		return restore(err)
+	}
 	usage, err := desktopstorage.Inspect(target)
 	if err != nil {
 		return restore(err)

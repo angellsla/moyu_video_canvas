@@ -30,6 +30,7 @@ func (s *Service) DiagnosticsDomain() *diagnostics.Service {
 		deps := diagnostics.Dependencies{Store: s.repo, Brand: diagnosticBrand{svc: s}, Config: s}
 		if s.mode == serviceModeLocal {
 			deps.DataDir = s.dataDir
+			deps.ResourceDir = s.resourceDir
 			deps.UpdateLogDir = s.dataDir
 			deps.TraceSource = runtimeTraceSource{service: s}
 			deps.AssistantEvidence = assistantdiagnostics.New(s.dataDir)

@@ -25,10 +25,13 @@ const identityFileName = "identity.json"
 
 type Identity struct {
 	privateKey ed25519.PrivateKey
+	nodeID     string
+	keyFresh   bool
 }
 
 type identityFile struct {
 	Version                int    `json:"version"`
+	NodeID                 string `json:"nodeId,omitempty"`
 	EncryptedPrivateKeyB64 string `json:"encryptedPrivateKey"`
 }
 
@@ -117,6 +120,9 @@ func (i *Identity) ID() string {
 	if i == nil || len(i.privateKey) != ed25519.PrivateKeySize {
 		return ""
 	}
+	if i.nodeID != "" {
+		return i.nodeID
+	}
 	return Fingerprint(i.privateKey.Public().(ed25519.PublicKey))
 }
 
@@ -168,14 +174,14 @@ func (i *Identity) TLSCertificate() (tls.Certificate, error) {
 	)
 }
 
-func (i *Identity) ClientTLSConfig(expectedPeerID string) (*tls.Config, error) {
+func (i *Identity) ClientTLSConfig(expectedPeerID, expectedKeyFingerprint string) (*tls.Config, error) {
 	certificate, err := i.TLSCertificate()
 	if err != nil {
 		return nil, err
 	}
 	expectedPeerID = strings.TrimSpace(expectedPeerID)
-	if expectedPeerID == "" {
-		return nil, errors.New("expected peer identity is required")
+	if !validNodeID(expectedPeerID) || !validNodeID(expectedKeyFingerprint) {
+		return nil, errors.New("expected peer identity and key fingerprint are required")
 	}
 	return &tls.Config{
 		MinVersion:         tls.VersionTLS13,
@@ -186,7 +192,7 @@ func (i *Identity) ClientTLSConfig(expectedPeerID string) (*tls.Config, error) {
 				return errors.New("peer certificate count is invalid")
 			}
 			publicKey, ok := state.PeerCertificates[0].PublicKey.(ed25519.PublicKey)
-			if !ok || Fingerprint(publicKey) != expectedPeerID {
+			if !ok || certificateNodeID(state.PeerCertificates[0]) != expectedPeerID || Fingerprint(publicKey) != expectedKeyFingerprint {
 				return errors.New("peer identity fingerprint mismatch")
 			}
 			return nil
@@ -194,7 +200,7 @@ func (i *Identity) ClientTLSConfig(expectedPeerID string) (*tls.Config, error) {
 	}, nil
 }
 
-func (i *Identity) ServerTLSConfig(isTrusted func(string) bool) (*tls.Config, error) {
+func (i *Identity) ServerTLSConfig(isTrusted func(string, ed25519.PublicKey) bool) (*tls.Config, error) {
 	certificate, err := i.TLSCertificate()
 	if err != nil {
 		return nil, err
@@ -211,10 +217,20 @@ func (i *Identity) ServerTLSConfig(isTrusted func(string) bool) (*tls.Config, er
 				return errors.New("peer certificate count is invalid")
 			}
 			publicKey, ok := state.PeerCertificates[0].PublicKey.(ed25519.PublicKey)
-			if !ok || !isTrusted(Fingerprint(publicKey)) {
+			peerID := certificateNodeID(state.PeerCertificates[0])
+			if !ok || peerID == "" || !isTrusted(peerID, publicKey) {
 				return errors.New("peer identity is not trusted")
 			}
 			return nil
 		},
 	}, nil
+}
+
+// The certificate binds a claimed device ID to a key. Trust must also pin that
+// key: a hardware-derived ID is public information, not proof of possession.
+func certificateNodeID(certificate *x509.Certificate) string {
+	if certificate == nil || !validNodeID(certificate.Subject.CommonName) {
+		return ""
+	}
+	return certificate.Subject.CommonName
 }

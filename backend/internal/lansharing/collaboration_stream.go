@@ -195,9 +195,12 @@ func (m *Manager) CreateCollaborationCanvasStreamTicket(ctx context.Context, can
 	if !validCollaborationCanvasID(canvasID) {
 		return "", ErrInvalid
 	}
-	var row collaborationCanvasExistence
-	if err := m.db.WithContext(ctx).Table("lan_collaboration_canvases").Select("id").Where("id = ? AND deleted_at IS NULL", canvasID).Take(&row).Error; err != nil {
+	var row model.LANCollaborationCanvas
+	if err := m.db.WithContext(ctx).Where("id = ? AND deleted_at IS NULL", canvasID).Take(&row).Error; err != nil {
 		return "", collaborationRecordError(err)
+	}
+	if !m.localCanvasAllowed(ctx, canvasID) {
+		return "", ErrPeerNotTrusted
 	}
 	return m.collaborationHub.issueTicket(canvasID)
 }
@@ -213,9 +216,13 @@ func (m *Manager) HandleCollaborationCanvasStream(w http.ResponseWriter, r *http
 		http.Error(w, "collaboration stream ticket is invalid or expired", http.StatusForbidden)
 		return
 	}
-	var row collaborationCanvasExistence
-	if err := m.db.WithContext(r.Context()).Table("lan_collaboration_canvases").Select("id").Where("id = ? AND deleted_at IS NULL", canvasID).Take(&row).Error; err != nil {
+	var row model.LANCollaborationCanvas
+	if err := m.db.WithContext(r.Context()).Where("id = ? AND deleted_at IS NULL", canvasID).Take(&row).Error; err != nil {
 		http.NotFound(w, r)
+		return
+	}
+	if !m.localCanvasAllowed(r.Context(), canvasID) {
+		http.Error(w, "canvas access denied", http.StatusForbidden)
 		return
 	}
 	conn, err := collaborationStreamUpgrader.Upgrade(w, r, nil)
@@ -244,6 +251,9 @@ func (m *Manager) HandleCollaborationCanvasStream(w http.ResponseWriter, r *http
 	_ = conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 	conn.SetPongHandler(func(string) error { return conn.SetReadDeadline(time.Now().Add(90 * time.Second)) })
 	for {
+		if !m.localCanvasAllowed(r.Context(), canvasID) {
+			return
+		}
 		_, data, readErr := conn.ReadMessage()
 		if readErr != nil {
 			return
@@ -299,12 +309,12 @@ func (m *Manager) HandlePeerCollaborationPresence(w http.ResponseWriter, r *http
 	if !validNodeID(origin) {
 		origin = peerID
 	}
-	if room.CreatedByNodeID == m.NodeID() && origin != peerID {
+	if (room.RoomID == "" && room.CreatedByNodeID == m.NodeID() || room.RoomID != "") && origin != peerID {
 		writePeerError(w, ErrPeerNotTrusted)
 		return
 	}
 	m.collaborationHub.broadcastPresence(payload.CanvasID, origin, payload.State)
-	if room.CreatedByNodeID == m.NodeID() {
+	if room.RoomID == "" && room.CreatedByNodeID == m.NodeID() {
 		m.broadcastCollaborationPresence(r.Context(), payload.CanvasID, origin, payload.State, peerID)
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"accepted": true})
@@ -354,7 +364,7 @@ func (m *Manager) handlePeerCollaborationStream(w http.ResponseWriter, r *http.R
 			if !validNodeID(origin) {
 				origin = peerID
 			}
-			if room.CreatedByNodeID == m.NodeID() && origin != peerID {
+			if (room.RoomID == "" && room.CreatedByNodeID == m.NodeID() || room.RoomID != "") && origin != peerID {
 				return
 			}
 			accepted, err := m.appendCollaborationCanvasUpdate(r.Context(), frame.CanvasID, update, origin, false)
@@ -376,11 +386,11 @@ func (m *Manager) handlePeerCollaborationStream(w http.ResponseWriter, r *http.R
 			if !validNodeID(origin) {
 				origin = peerID
 			}
-			if room.CreatedByNodeID == m.NodeID() && origin != peerID {
+			if (room.RoomID == "" && room.CreatedByNodeID == m.NodeID() || room.RoomID != "") && origin != peerID {
 				return
 			}
 			m.collaborationHub.broadcastPresence(frame.CanvasID, origin, frame.State)
-			if room.CreatedByNodeID == m.NodeID() {
+			if room.RoomID == "" && room.CreatedByNodeID == m.NodeID() {
 				m.broadcastCollaborationPresence(r.Context(), frame.CanvasID, origin, frame.State, peerID)
 			}
 		default:
@@ -409,7 +419,7 @@ func (m *Manager) sendPeerCollaborationFrame(peerID, address string, port int, f
 		connection.conn = nil
 	}
 	if connection.conn == nil {
-		config, err := m.identity.ClientTLSConfig(peerID)
+		config, err := m.clientTLSConfig(peerID)
 		if err != nil {
 			return err
 		}
@@ -463,7 +473,7 @@ func (m *Manager) collaborationTargets(ctx context.Context, canvasID, excludePee
 	}
 	targets := make([]PeerSummary, 0, len(peers))
 	for _, peer := range peers {
-		if peer.PeerID == excludePeerID || (room.CreatedByNodeID != m.NodeID() && peer.PeerID != room.CreatedByNodeID) {
+		if peer.PeerID == excludePeerID || (room.RoomID != "" && !m.roomAccess(room.RoomID, peer.PeerID)) || (room.RoomID == "" && room.CreatedByNodeID != m.NodeID() && peer.PeerID != room.CreatedByNodeID) {
 			continue
 		}
 		targets = append(targets, peer)
@@ -594,7 +604,7 @@ func (m *Manager) postCollaborationUpdate(peerID, address string, port int, canv
 	if !m.Status().Enabled || !m.isTrusted(peerID) {
 		return false
 	}
-	config, err := m.identity.ClientTLSConfig(peerID)
+	config, err := m.clientTLSConfig(peerID)
 	if err != nil {
 		return false
 	}
@@ -618,7 +628,7 @@ func (m *Manager) postCollaborationPresence(peerID, address string, port int, pa
 	if !m.Status().Enabled || !m.isTrusted(peerID) {
 		return false
 	}
-	config, err := m.identity.ClientTLSConfig(peerID)
+	config, err := m.clientTLSConfig(peerID)
 	if err != nil {
 		return false
 	}

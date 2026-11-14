@@ -1,6 +1,7 @@
 package lansharing
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -18,6 +19,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -85,6 +87,7 @@ type PeerSummary struct {
 }
 
 type CatalogSummary struct {
+	RoomID      string    `json:"roomId,omitempty"`
 	ID          string    `json:"id"`
 	Name        string    `json:"name"`
 	UpdateCount int64     `json:"updateCount"`
@@ -99,6 +102,7 @@ type CatalogUpdatePage struct {
 }
 
 type catalogMetadata struct {
+	RoomID          string    `json:"roomId,omitempty"`
 	ID              string    `json:"id"`
 	Name            string    `json:"name"`
 	CreatedByNodeID string    `json:"createdByNodeId"`
@@ -147,6 +151,7 @@ func (job *catalogSyncJob) nextAfter(err error) bool {
 }
 
 type Manager struct {
+	roomMu   sync.Mutex
 	dataDir  string
 	db       *gorm.DB
 	identity *Identity
@@ -184,13 +189,9 @@ type Manager struct {
 	syncWG      sync.WaitGroup
 }
 
-func NewManager(dataDir string, db *gorm.DB) (*Manager, error) {
-	if db == nil {
-		return nil, errors.New("LAN sharing database is required")
-	}
-	identity, err := LoadIdentity(dataDir)
-	if err != nil {
-		return nil, err
+func NewManager(dataDir string, db *gorm.DB, identity *Identity) (*Manager, error) {
+	if db == nil || identity == nil || !validNodeID(identity.ID()) || strings.TrimSpace(dataDir) == "" {
+		return nil, errors.New("LAN sharing database, data directory and identity are required")
 	}
 	syncContext, syncCancel := context.WithCancel(context.Background())
 	manager := &Manager{
@@ -201,6 +202,7 @@ func NewManager(dataDir string, db *gorm.DB) (*Manager, error) {
 		syncJobs:         make(map[string]*catalogSyncJob), syncContext: syncContext, syncCancel: syncCancel,
 	}
 	if err := manager.persistIdentity(context.Background()); err != nil {
+		syncCancel()
 		return nil, fmt.Errorf("persist LAN sharing identity: %w", err)
 	}
 	return manager, nil
@@ -223,6 +225,35 @@ func (m *Manager) persistIdentity(ctx context.Context) error {
 	var existing model.LANNodeIdentity
 	err = m.db.WithContext(ctx).First(&existing).Error
 	if err == nil {
+		if existing.NodeID != m.identity.ID() || existing.PublicKey != base64.RawStdEncoding.EncodeToString(publicKey) {
+			storedKey, decryptErr := localcrypto.Decrypt(m.dataDir, existing.PrivateKeyCipher)
+			matchesCurrentKey := decryptErr == nil && storedKey == privateKey && existing.PublicKey == base64.RawStdEncoding.EncodeToString(publicKey)
+			matchesLegacyKey := false
+			if !matchesCurrentKey && !m.identity.keyFresh {
+				if _, err := os.Stat(filepath.Join(m.dataDir, "lan-sharing", identityFileName)); err == nil {
+					legacy, legacyErr := LoadIdentity(m.dataDir)
+					matchesLegacyKey = legacyErr == nil && existing.NodeID == legacy.ID() && existing.PublicKey == base64.RawStdEncoding.EncodeToString(legacy.PublicKey()) && storedKey == base64.RawStdEncoding.EncodeToString(legacy.privateKey)
+				} else if !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
+			}
+			if !matchesCurrentKey && !matchesLegacyKey && !m.identity.keyFresh {
+				return errors.New("stored LAN identity does not match the local or legacy device identity")
+			}
+			err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+				if err := migrateNodeReferences(tx, existing.NodeID, m.NodeID()); err != nil {
+					return err
+				}
+				return tx.Model(&model.LANNodeIdentity{}).Where("node_id = ?", existing.NodeID).Updates(map[string]any{
+					"node_id": m.NodeID(), "public_key": base64.RawStdEncoding.EncodeToString(publicKey),
+					"private_key_cipher": ciphertext, "updated_at": time.Now().UTC(),
+				}).Error
+			})
+			if err == nil {
+				m.setNickname(existing.Nickname)
+			}
+			return err
+		}
 		if existing.NodeID != m.identity.ID() || existing.PublicKey != base64.RawStdEncoding.EncodeToString(publicKey) {
 			return errors.New("stored LAN sharing identity does not match the local identity file")
 		}
@@ -292,6 +323,12 @@ func (m *Manager) SetLocalNickname(ctx context.Context, nickname string) (Status
 			return m.Status(), err
 		}
 	}
+	if nickname == "" {
+		nickname = m.LocalNickname()
+	}
+	if err := m.updateRoomNickname(ctx, nickname); err != nil {
+		return m.Status(), err
+	}
 	return m.Status(), nil
 }
 
@@ -344,8 +381,9 @@ func (m *Manager) Start(ctx context.Context) (Status, error) {
 		m.mu.Unlock()
 		return m.Status(), nil
 	}
-	server, err := NewPeerServer(m.identity, func(id string) bool {
-		return m.isTrusted(id) || m.hasActivePairingCode()
+	server, err := NewPeerServer(m.identity, func(id string, key ed25519.PublicKey) bool {
+		// The directory and join inbox accept new devices; data routes check trust.
+		return validNodeID(id) && len(key) == ed25519.PublicKeySize
 	}, m.peerHTTPHandler())
 	if err != nil {
 		m.clearPairingCode()
@@ -371,6 +409,7 @@ func (m *Manager) Start(ctx context.Context) (Status, error) {
 	go m.runBroadcastDiscovery(discoveryCtx, endpoints, port)
 	go m.runCatalogSyncRefresh(discoveryCtx)
 	go m.runCollaborationPresenceHeartbeat(discoveryCtx)
+	go m.runRoomRefresh(discoveryCtx)
 	m.mu.Unlock()
 	m.scheduleKnownCatalogSync()
 	return m.Status(), nil
@@ -465,6 +504,9 @@ func (m *Manager) DiscoveredPeers() []Peer {
 			continue
 		}
 		item.Addresses = append([]string(nil), addresses...)
+		sort.SliceStable(item.Addresses, func(i, j int) bool {
+			return m.discoveredAddressAt[id][item.Addresses[i]].After(m.discoveredAddressAt[id][item.Addresses[j]])
+		})
 		m.discovered[id] = item
 		peers = append(peers, item)
 	}
@@ -475,11 +517,14 @@ func (m *Manager) DiscoveredPeers() []Peer {
 
 func (m *Manager) TrustedPeers(ctx context.Context) ([]PeerSummary, error) {
 	var rows []model.LANTrustedPeer
-	if err := m.db.WithContext(ctx).Where("trust_state = ?", "trusted").Order("last_seen_at DESC, node_id").Find(&rows).Error; err != nil {
+	if err := m.db.WithContext(ctx).Where("trust_state IN ?", []string{"trusted", "room"}).Order("last_seen_at DESC, node_id").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	result := make([]PeerSummary, 0, len(rows))
 	for _, row := range rows {
+		if row.TrustState == "room" && !m.activeRoomPeer(row.NodeID) {
+			continue
+		}
 		result = append(result, PeerSummary{
 			PeerID: row.NodeID, Nickname: row.Nickname, Address: row.Address, Port: row.Port,
 			TrustedAt: row.FirstSeenAt, LastSeen: row.LastSeenAt,
@@ -502,18 +547,22 @@ func (m *Manager) PairPeer(ctx context.Context, request PairRequest) (PeerSummar
 	if server == nil {
 		return PeerSummary{}, ErrInvalid
 	}
-	if peerID == "" {
+	if request.Port == 0 {
 		var err error
-		if request.Port == 0 {
-			peerID, request.Port, err = queryPairEndpoint(ctx, address, broadcastDiscoveryPort, code)
-		} else {
-			peerID, err = queryPairEndpointTLS(ctx, m.identity, address, request.Port, code)
-		}
+		peerID, request.Port, err = queryPairEndpoint(ctx, address, broadcastDiscoveryPort, code)
 		if err != nil {
 			return PeerSummary{}, err
 		}
-		peerID = strings.ToLower(peerID)
 	}
+	// Bind the code proof to the actual TLS key before transmitting the code.
+	probedID, keyFingerprint, err := queryPairEndpointTLS(ctx, m.identity, address, request.Port, code)
+	if err != nil {
+		return PeerSummary{}, err
+	}
+	if peerID != "" && peerID != probedID {
+		return PeerSummary{}, ErrConflict
+	}
+	peerID = probedID
 	if !validNodeID(peerID) || peerID == m.NodeID() || request.Port < 1 || request.Port > 65535 {
 		return PeerSummary{}, ErrInvalid
 	}
@@ -522,7 +571,7 @@ func (m *Manager) PairPeer(ctx context.Context, request PairRequest) (PeerSummar
 	if err != nil {
 		return PeerSummary{}, ErrInvalid
 	}
-	clientTLS, err := m.identity.ClientTLSConfig(peerID)
+	clientTLS, err := m.identity.ClientTLSConfig(peerID, keyFingerprint)
 	if err != nil {
 		return PeerSummary{}, err
 	}
@@ -574,7 +623,7 @@ func (m *Manager) PairPeer(ctx context.Context, request PairRequest) (PeerSummar
 	if peerNickname == "" {
 		peerNickname = reply.Nickname
 	}
-	trusted, err := m.saveTrustedPeer(ctx, peerID, remotePublicKey, peerNickname, address.String(), request.Port)
+	trusted, err := m.savePairedPeer(ctx, peerID, remotePublicKey, peerNickname, address.String(), request.Port, true)
 	if err != nil {
 		return PeerSummary{}, err
 	}
@@ -607,7 +656,10 @@ func (m *Manager) RevokePeer(ctx context.Context, peerID string) error {
 	if !validNodeID(peerID) || peerID == m.NodeID() {
 		return ErrInvalid
 	}
-	result := m.db.WithContext(ctx).Model(&model.LANTrustedPeer{}).Where("node_id = ? AND trust_state = ?", peerID, "trusted").Updates(map[string]any{
+	if m.activeRoomPeer(peerID) {
+		return ErrConflict
+	}
+	result := m.db.WithContext(ctx).Model(&model.LANTrustedPeer{}).Where("node_id = ? AND trust_state IN ?", peerID, []string{"trusted", "room"}).Updates(map[string]any{
 		"trust_state": "revoked", "updated_at": time.Now().UTC(),
 	})
 	if result.Error != nil {
@@ -632,27 +684,37 @@ func (m *Manager) Catalogs(ctx context.Context) ([]CatalogSummary, error) {
 	}
 	result := make([]CatalogSummary, 0, len(rows))
 	for _, row := range rows {
+		if row.RoomID != "" && !m.roomMember(row.RoomID, m.NodeID()) {
+			continue
+		}
 		var count int64
 		if err := m.db.WithContext(ctx).Model(&model.LANCatalogYjsUpdate{}).Where("catalog_id = ?", row.ID).Count(&count).Error; err != nil {
 			return nil, err
 		}
-		result = append(result, CatalogSummary{ID: row.ID, Name: row.Name, UpdateCount: count, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt})
+		result = append(result, CatalogSummary{RoomID: row.RoomID, ID: row.ID, Name: row.Name, UpdateCount: count, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt})
 	}
 	return result, nil
 }
 
 func (m *Manager) CreateCatalog(ctx context.Context, name string) (CatalogSummary, error) {
+	return m.CreateRoomCatalog(ctx, "", name)
+}
+
+func (m *Manager) CreateRoomCatalog(ctx context.Context, roomID, name string) (CatalogSummary, error) {
+	if roomID != "" && !m.roomMember(roomID, m.NodeID()) {
+		return CatalogSummary{}, ErrPeerNotTrusted
+	}
 	name = strings.TrimSpace(name)
 	if name == "" || len([]rune(name)) > 120 {
 		return CatalogSummary{}, ErrInvalid
 	}
 	now := time.Now().UTC()
-	catalog := model.LANShareCatalog{ID: kernel.NewID(), Name: name, CreatedByNodeID: m.NodeID(), CreatedAt: now, UpdatedAt: now}
+	catalog := model.LANShareCatalog{RoomID: roomID, ID: kernel.NewID(), Name: name, CreatedByNodeID: m.NodeID(), CreatedAt: now, UpdatedAt: now}
 	if err := m.db.WithContext(ctx).Create(&catalog).Error; err != nil {
 		return CatalogSummary{}, err
 	}
 	m.scheduleKnownCatalogSync()
-	return CatalogSummary{ID: catalog.ID, Name: catalog.Name, CreatedAt: catalog.CreatedAt, UpdatedAt: catalog.UpdatedAt}, nil
+	return CatalogSummary{RoomID: catalog.RoomID, ID: catalog.ID, Name: catalog.Name, CreatedAt: catalog.CreatedAt, UpdatedAt: catalog.UpdatedAt}, nil
 }
 
 func (m *Manager) catalogMetadata(ctx context.Context) ([]catalogMetadata, error) {
@@ -663,7 +725,7 @@ func (m *Manager) catalogMetadata(ctx context.Context) ([]catalogMetadata, error
 	items := make([]catalogMetadata, 0, len(catalogs))
 	for _, catalog := range catalogs {
 		items = append(items, catalogMetadata{
-			ID: catalog.ID, Name: catalog.Name, CreatedByNodeID: catalog.CreatedByNodeID,
+			RoomID: catalog.RoomID, ID: catalog.ID, Name: catalog.Name, CreatedByNodeID: catalog.CreatedByNodeID,
 			CreatedAt: catalog.CreatedAt, UpdatedAt: catalog.UpdatedAt,
 		})
 	}
@@ -671,6 +733,9 @@ func (m *Manager) catalogMetadata(ctx context.Context) ([]catalogMetadata, error
 }
 
 func (m *Manager) upsertCatalogMetadata(ctx context.Context, item catalogMetadata) error {
+	if item.RoomID != "" && !m.roomMember(item.RoomID, m.NodeID()) {
+		return ErrPeerNotTrusted
+	}
 	item.ID = strings.TrimSpace(item.ID)
 	item.Name = strings.TrimSpace(item.Name)
 	item.CreatedByNodeID = strings.ToLower(strings.TrimSpace(item.CreatedByNodeID))
@@ -681,14 +746,14 @@ func (m *Manager) upsertCatalogMetadata(ctx context.Context, item catalogMetadat
 	err := m.db.WithContext(ctx).First(&existing, "id = ?", item.ID).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return m.db.WithContext(ctx).Create(&model.LANShareCatalog{
-			ID: item.ID, Name: item.Name, CreatedByNodeID: item.CreatedByNodeID,
+			RoomID: item.RoomID, ID: item.ID, Name: item.Name, CreatedByNodeID: item.CreatedByNodeID,
 			CreatedAt: item.CreatedAt.UTC(), UpdatedAt: item.UpdatedAt.UTC(),
 		}).Error
 	}
 	if err != nil {
 		return err
 	}
-	if existing.CreatedByNodeID != item.CreatedByNodeID || !existing.CreatedAt.Equal(item.CreatedAt) {
+	if existing.RoomID != item.RoomID || existing.CreatedByNodeID != item.CreatedByNodeID || !existing.CreatedAt.Equal(item.CreatedAt) {
 		return ErrConflict
 	}
 	if item.UpdatedAt.After(existing.UpdatedAt) {
@@ -719,6 +784,9 @@ func (m *Manager) appendCatalogUpdate(ctx context.Context, catalogID string, upd
 			return false, ErrNotFound
 		}
 		return false, err
+	}
+	if catalog.RoomID != "" && !m.roomMember(catalog.RoomID, m.NodeID()) {
+		return false, ErrPeerNotTrusted
 	}
 	digest := sha256.Sum256(update)
 	row := model.LANCatalogYjsUpdate{
@@ -752,6 +820,9 @@ func (m *Manager) CatalogUpdates(ctx context.Context, catalogID, after string, l
 			return CatalogUpdatePage{}, ErrNotFound
 		}
 		return CatalogUpdatePage{}, err
+	}
+	if catalog.RoomID != "" && !m.roomMember(catalog.RoomID, m.NodeID()) {
+		return CatalogUpdatePage{}, ErrPeerNotTrusted
 	}
 	query := m.db.WithContext(ctx).Where("catalog_id = ?", catalogID)
 	if after != "" {
@@ -818,6 +889,10 @@ func (m *Manager) RegisterPeerHandler(pattern string, handler http.Handler) erro
 
 func (m *Manager) peerHTTPHandler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /rooms/directory", m.roomDirectory)
+	mux.HandleFunc("POST /rooms/join", m.receiveRoomJoin)
+	mux.HandleFunc("GET /rooms/join/{requestID}", m.pollRoomJoin)
+	mux.HandleFunc("POST /rooms/{roomID}/events", m.exchangeRoomEvents)
 	mux.HandleFunc("POST /pair", m.handlePair)
 	mux.HandleFunc("GET /pair/probe", m.handlePairProbe)
 	mux.HandleFunc("GET /catalogs", m.handlePeerGetCatalogs)
@@ -841,6 +916,10 @@ func (m *Manager) peerHTTPHandler() http.Handler {
 			http.Error(w, "client identity required", http.StatusUnauthorized)
 			return
 		}
+		if strings.HasPrefix(r.URL.Path, "/rooms/") {
+			mux.ServeHTTP(w, r)
+			return
+		}
 		if r.URL.Path == "/pair" {
 			if r.Method != http.MethodPost {
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -857,11 +936,15 @@ func (m *Manager) peerHTTPHandler() http.Handler {
 			mux.ServeHTTP(w, r)
 			return
 		}
-		if !m.isTrusted(peerID) {
+		if !m.isTrustedIdentity(peerID, requestPeerKey(r)) {
 			http.Error(w, "peer is not trusted", http.StatusForbidden)
 			return
 		}
 		m.markPeerSeen(peerID)
+		if catalogID := strings.Split(strings.TrimPrefix(r.URL.Path, "/catalogs/"), "/")[0]; strings.HasPrefix(r.URL.Path, "/catalogs/") && !m.catalogPeerAllowed(r.Context(), catalogID, peerID) {
+			writePeerError(w, ErrPeerNotTrusted)
+			return
+		}
 		mux.ServeHTTP(w, r)
 	})
 }
@@ -888,7 +971,7 @@ func (m *Manager) handlePairProbe(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "pairing service unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	writeJSON(w, http.StatusOK, newPairProbeReply(nonce, m.NodeID(), port, code))
+	writeJSON(w, http.StatusOK, newPairProbeReply(nonce, m.NodeID(), port, code, Fingerprint(m.identity.PublicKey())))
 }
 
 func (m *Manager) handlePair(w http.ResponseWriter, r *http.Request) {
@@ -906,7 +989,7 @@ func (m *Manager) handlePair(w http.ResponseWriter, r *http.Request) {
 	}
 	peerID := requestPeerID(r)
 	publicKey, err := base64.RawStdEncoding.DecodeString(payload.PublicKey)
-	if err != nil || len(publicKey) != ed25519.PublicKeySize || Fingerprint(ed25519.PublicKey(publicKey)) != peerID || strings.ToLower(strings.TrimSpace(payload.PeerID)) != peerID {
+	if err != nil || len(publicKey) != ed25519.PublicKeySize || !bytes.Equal(publicKey, requestPeerKey(r)) || strings.ToLower(strings.TrimSpace(payload.PeerID)) != peerID {
 		http.Error(w, "peer identity mismatch", http.StatusForbidden)
 		return
 	}
@@ -916,13 +999,14 @@ func (m *Manager) handlePair(w http.ResponseWriter, r *http.Request) {
 	}
 	// A trusted certificate may retry pairing after a previous response was lost.
 	// Revoked or new peers still need the current one-time code.
-	if !m.isTrusted(peerID) {
+	keyAlreadyTrusted := m.pairedPeer(peerID) && m.isTrustedIdentity(peerID, ed25519.PublicKey(publicKey))
+	if !keyAlreadyTrusted {
 		if err := m.consumePairingCode(strings.TrimSpace(payload.PairingCode)); err != nil {
 			http.Error(w, "pairing code is invalid or expired", http.StatusForbidden)
 			return
 		}
 	}
-	trusted, err := m.saveTrustedPeer(r.Context(), peerID, ed25519.PublicKey(publicKey), payload.Nickname, payload.Address, payload.Port)
+	trusted, err := m.savePairedPeer(r.Context(), peerID, ed25519.PublicKey(publicKey), payload.Nickname, payload.Address, payload.Port, !keyAlreadyTrusted)
 	if err != nil {
 		http.Error(w, "could not persist peer trust", http.StatusInternalServerError)
 		return
@@ -997,7 +1081,13 @@ func (m *Manager) handlePeerGetCatalogs(w http.ResponseWriter, r *http.Request) 
 		writePeerError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"catalogs": items})
+	visible := make([]catalogMetadata, 0, len(items))
+	for _, item := range items {
+		if m.catalogScopeAllowed(item.RoomID, requestPeerID(r)) {
+			visible = append(visible, item)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"catalogs": visible})
 }
 
 func (m *Manager) handlePeerPostCatalog(w http.ResponseWriter, r *http.Request) {
@@ -1013,6 +1103,10 @@ func (m *Manager) handlePeerPostCatalog(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid catalog metadata", http.StatusBadRequest)
 		return
 	}
+	if !m.catalogScopeAllowed(item.RoomID, requestPeerID(r)) {
+		writePeerError(w, ErrPeerNotTrusted)
+		return
+	}
 	if err := m.upsertCatalogMetadata(r.Context(), item); err != nil {
 		writePeerError(w, err)
 		return
@@ -1021,7 +1115,15 @@ func (m *Manager) handlePeerPostCatalog(w http.ResponseWriter, r *http.Request) 
 }
 
 func (m *Manager) saveTrustedPeer(ctx context.Context, peerID string, publicKey ed25519.PublicKey, nickname, address string, port int) (PeerSummary, error) {
-	if !validNodeID(peerID) || len(publicKey) != ed25519.PublicKeySize || Fingerprint(publicKey) != peerID {
+	return m.saveTrustedPeerWithRotation(ctx, peerID, publicKey, nickname, address, port, false)
+}
+
+func (m *Manager) savePairedPeer(ctx context.Context, peerID string, publicKey ed25519.PublicKey, nickname, address string, port int, keyRotationAuthorized bool) (PeerSummary, error) {
+	return m.saveTrustedPeerWithRotation(ctx, peerID, publicKey, nickname, address, port, keyRotationAuthorized)
+}
+
+func (m *Manager) saveTrustedPeerWithRotation(ctx context.Context, peerID string, publicKey ed25519.PublicKey, nickname, address string, port int, keyRotationAuthorized bool) (PeerSummary, error) {
+	if !validNodeID(peerID) || len(publicKey) != ed25519.PublicKeySize {
 		return PeerSummary{}, ErrInvalid
 	}
 	if address != "" && !validPeerEndpoint(address, port) {
@@ -1030,6 +1132,9 @@ func (m *Manager) saveTrustedPeer(ctx context.Context, peerID string, publicKey 
 	now := time.Now().UTC()
 	nickname = normalizeNickname(nickname)
 	var row model.LANTrustedPeer
+	if err := m.migrateLegacyPeer(ctx, peerID, publicKey); err != nil {
+		return PeerSummary{}, err
+	}
 	err := m.db.WithContext(ctx).First(&row, "node_id = ?", peerID).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		row = model.LANTrustedPeer{
@@ -1043,7 +1148,10 @@ func (m *Manager) saveTrustedPeer(ctx context.Context, peerID string, publicKey 
 		return PeerSummary{}, err
 	} else {
 		if row.PublicKey != base64.RawStdEncoding.EncodeToString(publicKey) {
-			return PeerSummary{}, ErrConflict
+			if !keyRotationAuthorized {
+				return PeerSummary{}, ErrConflict
+			}
+			row.PublicKey = base64.RawStdEncoding.EncodeToString(publicKey)
 		}
 		row.Nickname, row.TrustState, row.LastSeenAt, row.UpdatedAt = nickname, "trusted", now, now
 		if address != "" {
@@ -1064,7 +1172,7 @@ func (m *Manager) isTrusted(peerID string) bool {
 		return false
 	}
 	var count int64
-	return m.db.Model(&model.LANTrustedPeer{}).Where("node_id = ? AND trust_state = ?", peerID, "trusted").Count(&count).Error == nil && count == 1
+	return (m.db.Model(&model.LANTrustedPeer{}).Where("node_id = ? AND trust_state = ?", peerID, "trusted").Count(&count).Error == nil && count == 1) || m.activeRoomPeer(peerID)
 }
 
 func (m *Manager) markPeerSeen(peerID string) {
@@ -1242,7 +1350,7 @@ func (m *Manager) syncPeerCatalogs(ctx context.Context, peerID, address string, 
 	if !validNodeID(peerID) || !m.isTrusted(peerID) || parsed == nil || parsed.To4() == nil || !isPrivateLANAddress(parsed) || port < 1 || port > 65535 {
 		return ErrPeerNotTrusted
 	}
-	config, err := m.identity.ClientTLSConfig(peerID)
+	config, err := m.clientTLSConfig(peerID)
 	if err != nil {
 		return err
 	}
@@ -1250,6 +1358,12 @@ func (m *Manager) syncPeerCatalogs(ctx context.Context, peerID, address string, 
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 20 * time.Second}
 	baseURL := "https://" + net.JoinHostPort(parsed.String(), fmt.Sprint(port))
+	if err := m.syncRoomWithPeer(ctx, client, baseURL, peerID); err != nil {
+		return err
+	}
+	if !m.isTrusted(peerID) {
+		return ErrPeerNotTrusted
+	}
 	var remote struct {
 		Catalogs []catalogMetadata `json:"catalogs"`
 	}
@@ -1260,6 +1374,9 @@ func (m *Manager) syncPeerCatalogs(ctx context.Context, peerID, address string, 
 		return err
 	}
 	for _, catalog := range remote.Catalogs {
+		if !m.catalogScopeAllowed(catalog.RoomID, peerID) {
+			return ErrPeerNotTrusted
+		}
 		if err := m.upsertCatalogMetadata(ctx, catalog); err != nil {
 			return err
 		}
@@ -1269,12 +1386,18 @@ func (m *Manager) syncPeerCatalogs(ctx context.Context, peerID, address string, 
 		return err
 	}
 	for _, catalog := range localCatalogs {
+		if !m.catalogScopeAllowed(catalog.RoomID, peerID) {
+			continue
+		}
 		var reply map[string]bool
 		if err := requestPeerJSON(ctx, client, http.MethodPost, baseURL+"/catalogs", catalog, &reply); err != nil {
 			return err
 		}
 	}
 	for _, catalog := range localCatalogs {
+		if !m.catalogScopeAllowed(catalog.RoomID, peerID) {
+			continue
+		}
 		if err := m.pullPeerCatalogUpdates(ctx, client, baseURL, peerID, catalog.ID); err != nil {
 			return err
 		}
@@ -1286,11 +1409,16 @@ func (m *Manager) syncPeerCatalogs(ctx context.Context, peerID, address string, 
 }
 
 func (m *Manager) rememberPeerEndpoint(ctx context.Context, peerID, address string, port int) error {
+	peerID = strings.ToLower(strings.TrimSpace(peerID))
+	parsed := net.ParseIP(strings.TrimSpace(address))
+	if m == nil || !validNodeID(peerID) || parsed == nil || !validPeerEndpoint(parsed.String(), port) {
+		return ErrInvalid
+	}
 	if !m.isTrusted(peerID) {
 		return ErrPeerNotTrusted
 	}
-	result := m.db.WithContext(ctx).Model(&model.LANTrustedPeer{}).Where("node_id = ? AND trust_state = ?", peerID, "trusted").Updates(map[string]any{
-		"address": address, "port": port, "last_seen_at": time.Now().UTC(),
+	result := m.db.WithContext(ctx).Model(&model.LANTrustedPeer{}).Where("node_id = ? AND trust_state IN ?", peerID, []string{"trusted", "room"}).Updates(map[string]any{
+		"address": parsed.To4().String(), "port": port, "last_seen_at": time.Now().UTC(),
 	})
 	if result.Error != nil {
 		return result.Error
@@ -1460,11 +1588,38 @@ func requestPeerID(r *http.Request) string {
 	if r == nil || r.TLS == nil || len(r.TLS.PeerCertificates) != 1 {
 		return ""
 	}
-	publicKey, ok := r.TLS.PeerCertificates[0].PublicKey.(ed25519.PublicKey)
-	if !ok {
-		return ""
+	return certificateNodeID(r.TLS.PeerCertificates[0])
+}
+
+func requestPeerKey(r *http.Request) ed25519.PublicKey {
+	if r == nil || r.TLS == nil || len(r.TLS.PeerCertificates) != 1 {
+		return nil
 	}
-	return Fingerprint(publicKey)
+	key, _ := r.TLS.PeerCertificates[0].PublicKey.(ed25519.PublicKey)
+	return key
+}
+
+func (m *Manager) isTrustedIdentity(peerID string, key ed25519.PublicKey) bool {
+	if m == nil || m.db == nil || !validNodeID(peerID) || len(key) != ed25519.PublicKeySize {
+		return false
+	}
+	var count int64
+	return (m.db.Model(&model.LANTrustedPeer{}).Where("node_id = ? AND public_key = ? AND trust_state = ?", peerID, base64.RawStdEncoding.EncodeToString(key), "trusted").Count(&count).Error == nil && count == 1) || m.validRoomPeerKey(peerID, key)
+}
+
+func (m *Manager) clientTLSConfig(peerID string) (*tls.Config, error) {
+	var peer model.LANTrustedPeer
+	if !m.isTrusted(peerID) {
+		return nil, ErrPeerNotTrusted
+	}
+	if err := m.db.Where("node_id = ?", peerID).First(&peer).Error; err != nil {
+		return nil, ErrPeerNotTrusted
+	}
+	key, err := base64.RawStdEncoding.DecodeString(peer.PublicKey)
+	if err != nil || len(key) != ed25519.PublicKeySize {
+		return nil, ErrPeerNotTrusted
+	}
+	return m.identity.ClientTLSConfig(peerID, Fingerprint(ed25519.PublicKey(key)))
 }
 
 func validNodeID(value string) bool {

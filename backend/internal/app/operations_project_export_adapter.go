@@ -80,7 +80,7 @@ func (s *operationSession) ExportCanvasProjectArchive(ctx context.Context, userI
 	if _, err = file.Seek(0, 0); err != nil {
 		return nil, err
 	}
-	resources := localasset.NewService(localasset.Dependencies{Repository: localasset.NewRepository(s.repo), Blobs: localasset.NewFileStore(s.service.dataDir), LocalStorage: true})
+	resources := localasset.NewService(localasset.Dependencies{Repository: localasset.NewRepository(s.repo), Blobs: localasset.NewFileStoreAt(s.service.resourceDir), LocalStorage: true})
 	resource, _, err := resources.Store(userID, "file", "MoyuCanvas-project.zip", "application/zip", info.Size(), 0, 0, 0, file, &key)
 	return resource, err
 }
@@ -98,7 +98,7 @@ func (o projectArchiveSources) OpenArchiveMedia(ctx context.Context, resourceID 
 	if err != nil {
 		return canvas.ArchiveMedia{}, err
 	}
-	resources := localasset.NewService(localasset.Dependencies{Repository: localasset.NewRepository(o.s.repo), Blobs: localasset.NewFileStore(o.s.service.dataDir), LocalStorage: true})
+	resources := localasset.NewService(localasset.Dependencies{Repository: localasset.NewRepository(o.s.repo), Blobs: localasset.NewFileStoreAt(o.s.service.resourceDir), LocalStorage: true})
 	_, body, err := resources.Open(o.userID, resourceID)
 	if err != nil {
 		return canvas.ArchiveMedia{}, err

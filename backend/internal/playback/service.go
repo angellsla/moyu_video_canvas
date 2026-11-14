@@ -19,6 +19,7 @@ import (
 // local playback copies.
 type Service struct {
 	dataDir        string
+	resourceDir    string
 	store          Store
 	runner         Runner
 	ctx            context.Context
@@ -46,6 +47,7 @@ func New(deps Deps) *Service {
 	}
 	return &Service{
 		dataDir:        deps.DataDir,
+		resourceDir:    deps.ResourceDir,
 		store:          deps.Store,
 		runner:         deps.Runner,
 		ctx:            ctx,

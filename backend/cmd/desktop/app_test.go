@@ -177,7 +177,7 @@ func TestDesktopAppBoundMethodsStayTiny(t *testing.T) {
 		names = append(names, typ.Method(i).Name)
 	}
 	sort.Strings(names)
-	if !reflect.DeepEqual(names, []string{"CheckForUpdate", "ChooseStorageDirectory", "CleanupPreviousStorage", "ConfirmUpdateStartup", "DepthComponentStatus", "DownloadDepthComponents", "DownloadUpdate", "InstallUpdate", "MigrateStorage", "OpenUpdateLogDirectory", "PauseDepthComponentDownload", "ReferenceStorageSettings", "ReferenceUploadStatus", "RuntimeConfig", "SaveOwnedArchive", "SaveOwnedArtifact", "SaveOwnedMedia", "SaveReferenceStorage", "StorageMigrationStatus", "StorageSettings", "TestReferenceStorage", "UpdateStatus", "UploadReferenceMedia"}) {
+	if !reflect.DeepEqual(names, []string{"AssetStorageSettings", "CheckForUpdate", "ChooseAssetStorageDirectory", "ChooseStorageDirectory", "CleanupPreviousAssetStorage", "CleanupPreviousStorage", "ConfirmUpdateStartup", "DepthComponentStatus", "DownloadDepthComponents", "DownloadUpdate", "InstallUpdate", "MigrateAssetStorage", "MigrateStorage", "OpenUpdateLogDirectory", "PauseDepthComponentDownload", "ReferenceStorageSettings", "ReferenceUploadStatus", "RuntimeConfig", "SaveOwnedArchive", "SaveOwnedArtifact", "SaveOwnedMedia", "SaveReferenceStorage", "StorageMigrationStatus", "StorageSettings", "TestReferenceStorage", "UpdateStatus", "UploadReferenceMedia"}) {
 		t.Fatalf("bound methods = %v", names)
 	}
 }

@@ -16,7 +16,7 @@ import {
     decodeLanCollaborationCanvasUpdate,
     type LanCollaborationCanvas,
 } from "@/services/api/lan-collaboration";
-import { getLanSharingStatus, startLanSharing } from "@/services/api/lan-sharing";
+import { getLanRooms, getLanSharingStatus, startLanSharing, type LanRoom } from "@/services/api/lan-sharing";
 import {
     applyCollaborativeCanvasUpdate,
     createCollaborativeCanvasDocument,
@@ -51,15 +51,18 @@ export function LanCollaborationLibrary({ projects }: { projects: CanvasProject[
     const [copyFromId, setCopyFromId] = useState<string>();
     const [name, setName] = useState("");
     const [showArchived, setShowArchived] = useState(false);
+    const [rooms, setRooms] = useState<LanRoom[]>([]);
+    const [roomId, setRoomId] = useState("");
 
     const personalProjects = useMemo(() => projects.filter((project) => !project.sharedCanvasId), [projects]);
 
     const refresh = useCallback(async () => {
         setRefreshing(true);
         try {
-            const [response, status] = await Promise.all([getLanCollaborationCanvases(), getLanSharingStatus()]);
+            const [response, status, roomResult] = await Promise.all([getLanCollaborationCanvases(), getLanSharingStatus(), getLanRooms()]);
             setCanvases(response.canvases);
             setLocalNodeId(status.nodeId);
+            setRooms(roomResult.rooms.filter((room) => room.joined && !room.dissolved));
         } catch {
             setCanvases([]);
         } finally {
@@ -99,16 +102,18 @@ export function LanCollaborationLibrary({ projects }: { projects: CanvasProject[
         setBusy("create");
         try {
             await ensureSharing();
-            const catalogId = await ensureSharedCanvasCatalog(`协作素材-${nanoid(8)}`);
+            if (!roomId) throw new Error("请选择团队房间");
+            const catalogId = await ensureSharedCanvasCatalog(`协作素材-${nanoid(8)}`, roomId);
             const content = { ...projectContent(source), title };
             const portable = await makePortableSharedCanvasContent(catalogId, content);
             const doc = createCollaborativeCanvasDocument(portable);
-            const roomResponse = await createLanCollaborationCanvas(title, encodeCollaborativeCanvasState(doc), catalogId);
+            const roomResponse = await createLanCollaborationCanvas(title, encodeCollaborativeCanvasState(doc), catalogId, roomId);
             doc.destroy();
             const localId = await saveLocalRoom(roomResponse.canvas, content);
             setCreateOpen(false);
             setName("");
             setCopyFromId(undefined);
+            setRoomId("");
             await refresh();
             navigate(`/canvas/${localId}`);
             message.success("协作画布已创建");
@@ -226,20 +231,20 @@ export function LanCollaborationLibrary({ projects }: { projects: CanvasProject[
                 <div className="flex items-center gap-2">
                     <Button size="small" onClick={() => setShowArchived((value) => !value)}>{showArchived ? "隐藏归档" : "查看归档"}</Button>
                     <Button size="small" icon={<RefreshCw className="size-3.5" />} aria-label="刷新协作画布" loading={refreshing} onClick={() => void refresh()} />
-                    <Button size="small" type="primary" icon={<Plus className="size-3.5" />} onClick={() => { setCopyFromId(undefined); setName(""); setCreateOpen(true); }}>新建协作画布</Button>
-                    <Button size="small" onClick={() => { setCopyFromId(personalProjects[0]?.id); setName(""); setCreateOpen(true); }} disabled={!personalProjects.length}>从现有画布复制</Button>
+                    <Button size="small" type="primary" icon={<Plus className="size-3.5" />} disabled={!rooms.length} onClick={() => { setCopyFromId(undefined); setName(""); setRoomId(rooms[0]?.id || ""); setCreateOpen(true); }}>新建协作画布</Button>
+                    <Button size="small" onClick={() => { setCopyFromId(personalProjects[0]?.id); setName(""); setRoomId(rooms[0]?.id || ""); setCreateOpen(true); }} disabled={!personalProjects.length || !rooms.length}>从现有画布复制</Button>
                 </div>
             </div>
             {visible.length ? (
                 <div className="divide-y divide-border">
                     {visible.map((room) => {
                         const local = useCanvasStore.getState().projects.find((project) => project.sharedCanvasId === room.id);
-                        const isOwner = room.createdByNodeId === localNodeId;
+                        const isOwner = room.roomId ? true : room.createdByNodeId === localNodeId;
                         return (
                             <div key={room.id} className="flex min-w-0 flex-wrap items-center gap-3 py-2.5">
                                 <div className="min-w-0 flex-1">
                                     <div className="truncate text-sm font-medium">{room.name}{room.archived ? <Tag className="ml-2">已归档</Tag> : null}</div>
-                                    <div className="mt-0.5 text-xs text-foreground/60">{local ? "已在本机打开" : "所有已配对设备可访问"} · {room.updateCount} 次更新</div>
+                                    <div className="mt-0.5 text-xs text-foreground/60">{local ? "已在本机打开" : room.roomId ? "团队成员可访问" : "所有已配对设备可访问"} · {room.updateCount} 次更新</div>
                                 </div>
                                 <Button size="small" type="primary" icon={<ExternalLink className="size-3.5" />} loading={busy === `open:${room.id}`} onClick={() => void openRoom(room)}>{local ? "打开" : "同步并打开"}</Button>
                                 {isOwner ? <>
@@ -257,10 +262,12 @@ export function LanCollaborationLibrary({ projects }: { projects: CanvasProject[
                     <div className="space-y-3">
                         <label className="block text-sm font-medium">来源画布</label>
                         <Select className="w-full" value={copyFromId} options={personalProjects.map((project) => ({ value: project.id, label: project.title }))} onChange={setCopyFromId} />
+                        <label className="block text-sm font-medium">团队房间</label>
+                        <Select className="w-full" value={roomId} options={rooms.map((room) => ({ value: room.id, label: `${room.name} · ${room.code}` }))} onChange={setRoomId} />
                         <label className="block text-sm font-medium">协作画布名称</label>
                         <Input value={name} maxLength={80} placeholder="输入名称" onChange={(event) => setName(event.target.value)} />
                     </div>
-                ) : <Input value={name} maxLength={80} placeholder="输入名称" onChange={(event) => setName(event.target.value)} />}
+                ) : <div className="space-y-3"><label className="block text-sm font-medium">团队房间</label><Select className="w-full" value={roomId} options={rooms.map((room) => ({ value: room.id, label: `${room.name} · ${room.code}` }))} onChange={setRoomId} /><Input value={name} maxLength={80} placeholder="输入名称" onChange={(event) => setName(event.target.value)} /></div>}
             </Modal>
         </section>
     );

@@ -2,8 +2,8 @@ package model
 
 import "time"
 
-// LANNodeIdentity stores the installation's stable public identity. Private
-// key material is persisted only as ciphertext produced by the workspace key.
+// LANNodeIdentity stores the device ID and its pinned signing key. Private
+// key material is persisted only as ciphertext produced by the local device key.
 type LANNodeIdentity struct {
 	NodeID           string    `json:"nodeId" gorm:"primaryKey;size:64"`
 	PublicKey        string    `json:"publicKey" gorm:"type:text;not null"`
@@ -26,6 +26,7 @@ type LANTrustedPeer struct {
 }
 
 type LANShareCatalog struct {
+	RoomID string `json:"roomId,omitempty" gorm:"size:64;index"`
 	ID              string    `json:"id" gorm:"primaryKey;size:36"`
 	Name            string    `json:"name" gorm:"size:120;not null"`
 	CreatedByNodeID string    `json:"createdByNodeId" gorm:"size:64;index"`
@@ -62,6 +63,8 @@ type LANCatalogResource struct {
 // LANCollaborationCanvas is a shared canvas room. It is independent from a
 // user's CanvasProject so collaboration never changes personal CAS/history.
 type LANCollaborationCanvas struct {
+	RoomID string `json:"roomId,omitempty" gorm:"size:64;index"`
+	MetadataAuthor string `json:"metadataAuthor,omitempty" gorm:"size:64"`
 	ID               string     `json:"id" gorm:"primaryKey;size:36"`
 	Name             string     `json:"name" gorm:"size:120;not null"`
 	CreatedByNodeID  string     `json:"createdByNodeId" gorm:"size:64;not null;index"`

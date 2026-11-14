@@ -2,6 +2,7 @@ package lansharing
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -16,7 +17,7 @@ import (
 
 type PeerServer struct {
 	identity  *Identity
-	isTrusted func(string) bool
+	isTrusted func(string, ed25519.PublicKey) bool
 	handler   http.Handler
 	mu        sync.Mutex
 	listeners []net.Listener
@@ -28,7 +29,7 @@ type PeerServer struct {
 	serveErr  chan error
 }
 
-func NewPeerServer(identity *Identity, isTrusted func(string) bool, handler http.Handler) (*PeerServer, error) {
+func NewPeerServer(identity *Identity, isTrusted func(string, ed25519.PublicKey) bool, handler http.Handler) (*PeerServer, error) {
 	if identity == nil || identity.ID() == "" || isTrusted == nil || handler == nil {
 		return nil, errors.New("LAN peer server dependencies are incomplete")
 	}

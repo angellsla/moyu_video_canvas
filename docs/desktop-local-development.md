@@ -6,7 +6,7 @@
 
 默认数据目录由 Go 的 `os.UserConfigDir()` 决定，新安装使用 `<系统用户配置目录>/MoyuCanvas`（Windows `%AppData%\MoyuCanvas`，macOS `~/Library/Application Support/MoyuCanvas`）。如果新目录不存在而已有 `VideoCanvas` 或 `BeefTV` 数据目录，桌面端会沿用现有目录，不自动搬移数据。
 
-其中包含本地 SQLite 数据库、资源文件和迁移备份。验收或调试时可通过环境变量指定隔离目录：
+其中包含本地 SQLite 数据库、设置和迁移备份；资源文件默认位于 `resources/`，也可在桌面设置中单独迁移。验收或调试时可通过环境变量指定隔离目录：
 
 ```bash
 CANVAS_DESKTOP_DATA_DIR="$(mktemp -d /tmp/moyucanvas-data.XXXXXX)" \

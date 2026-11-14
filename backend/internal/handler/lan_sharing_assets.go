@@ -521,6 +521,12 @@ func (h *lanAssetHandler) saveCatalogResource(ctx context.Context, catalogID, co
 }
 
 func (h *lanAssetHandler) requireCatalog(ctx context.Context, catalogID string) error {
+	if h.manager != nil {
+		if err := h.manager.CheckLocalCatalogAccess(ctx, catalogID); err != nil {
+			return err
+		}
+		return nil
+	}
 	var catalog model.LANShareCatalog
 	return h.db.WithContext(ctx).First(&catalog, "id = ?", catalogID).Error
 }

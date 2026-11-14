@@ -43,6 +43,7 @@ type Runner interface {
 // refusing new claims during Stop. Lead injects worker.Context().
 type Deps struct {
 	DataDir        string
+	ResourceDir    string
 	Store          Store
 	Runner         Runner
 	Context        context.Context

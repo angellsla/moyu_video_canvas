@@ -25,6 +25,7 @@ import (
 const maxCollaborationCanvasUpdate = 4 << 20
 
 type CollaborationCanvasSummary struct {
+	RoomID          string     `json:"roomId,omitempty"`
 	ID              string     `json:"id"`
 	Name            string     `json:"name"`
 	CreatedByNodeID string     `json:"createdByNodeId"`
@@ -43,6 +44,8 @@ type CollaborationCanvasUpdatePage struct {
 }
 
 type collaborationCanvasMetadata struct {
+	RoomID           string     `json:"roomId,omitempty"`
+	MetadataAuthor   string     `json:"metadataAuthor,omitempty"`
 	ID               string     `json:"id"`
 	Name             string     `json:"name"`
 	CreatedByNodeID  string     `json:"createdByNodeId"`
@@ -61,6 +64,9 @@ func (m *Manager) CollaborationCanvases(ctx context.Context) ([]CollaborationCan
 	}
 	result := make([]CollaborationCanvasSummary, 0, len(rows))
 	for _, row := range rows {
+		if row.RoomID != "" && !m.roomMember(row.RoomID, m.NodeID()) {
+			continue
+		}
 		var count int64
 		if err := m.db.WithContext(ctx).Model(&model.LANCollaborationCanvasYjsUpdate{}).Where("canvas_id = ?", row.ID).Count(&count).Error; err != nil {
 			return nil, err
@@ -71,6 +77,12 @@ func (m *Manager) CollaborationCanvases(ctx context.Context) ([]CollaborationCan
 }
 
 func (m *Manager) CreateCollaborationCanvas(ctx context.Context, name, assetCatalogID string, initialUpdate []byte) (CollaborationCanvasSummary, error) {
+	return m.CreateRoomCollaborationCanvas(ctx, "", name, assetCatalogID, initialUpdate)
+}
+func (m *Manager) CreateRoomCollaborationCanvas(ctx context.Context, roomID, name, assetCatalogID string, initialUpdate []byte) (CollaborationCanvasSummary, error) {
+	if roomID != "" && !m.roomMember(roomID, m.NodeID()) {
+		return CollaborationCanvasSummary{}, ErrPeerNotTrusted
+	}
 	name = strings.TrimSpace(name)
 	assetCatalogID = strings.TrimSpace(assetCatalogID)
 	if !validCollaborationCanvasName(name) || len(initialUpdate) > maxCollaborationCanvasUpdate || (assetCatalogID != "" && !validCollaborationCanvasID(assetCatalogID)) {
@@ -78,7 +90,7 @@ func (m *Manager) CreateCollaborationCanvas(ctx context.Context, name, assetCata
 	}
 	if assetCatalogID != "" {
 		var count int64
-		if err := m.db.WithContext(ctx).Model(&model.LANShareCatalog{}).Where("id = ?", assetCatalogID).Count(&count).Error; err != nil {
+		if err := m.db.WithContext(ctx).Model(&model.LANShareCatalog{}).Where("id = ? AND COALESCE(room_id, '') = ?", assetCatalogID, roomID).Count(&count).Error; err != nil {
 			return CollaborationCanvasSummary{}, err
 		}
 		if count != 1 {
@@ -86,10 +98,10 @@ func (m *Manager) CreateCollaborationCanvas(ctx context.Context, name, assetCata
 		}
 	}
 	if len(initialUpdate) > 0 {
-		return m.createCollaborationCanvasWithUpdate(ctx, name, assetCatalogID, initialUpdate)
+		return m.createCollaborationCanvasWithUpdate(ctx, roomID, name, assetCatalogID, initialUpdate)
 	}
 	now := time.Now().UTC()
-	row := model.LANCollaborationCanvas{ID: kernel.NewID(), Name: name, CreatedByNodeID: m.NodeID(), AssetCatalogID: assetCatalogID, MetadataRevision: 1, CreatedAt: now, UpdatedAt: now}
+	row := model.LANCollaborationCanvas{RoomID: roomID, MetadataAuthor: m.NodeID(), ID: kernel.NewID(), Name: name, CreatedByNodeID: m.NodeID(), AssetCatalogID: assetCatalogID, MetadataRevision: 1, CreatedAt: now, UpdatedAt: now}
 	if err := m.db.WithContext(ctx).Create(&row).Error; err != nil {
 		return CollaborationCanvasSummary{}, err
 	}
@@ -97,9 +109,9 @@ func (m *Manager) CreateCollaborationCanvas(ctx context.Context, name, assetCata
 	return collaborationCanvasSummary(row, 0), nil
 }
 
-func (m *Manager) createCollaborationCanvasWithUpdate(ctx context.Context, name, assetCatalogID string, update []byte) (CollaborationCanvasSummary, error) {
+func (m *Manager) createCollaborationCanvasWithUpdate(ctx context.Context, roomID, name, assetCatalogID string, update []byte) (CollaborationCanvasSummary, error) {
 	now := time.Now().UTC()
-	row := model.LANCollaborationCanvas{ID: kernel.NewID(), Name: name, CreatedByNodeID: m.NodeID(), AssetCatalogID: assetCatalogID, MetadataRevision: 1, CreatedAt: now, UpdatedAt: now}
+	row := model.LANCollaborationCanvas{RoomID: roomID, MetadataAuthor: m.NodeID(), ID: kernel.NewID(), Name: name, CreatedByNodeID: m.NodeID(), AssetCatalogID: assetCatalogID, MetadataRevision: 1, CreatedAt: now, UpdatedAt: now}
 	var stored model.LANCollaborationCanvasYjsUpdate
 	err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&row).Error; err != nil {
@@ -130,10 +142,10 @@ func (m *Manager) UpdateCollaborationCanvas(ctx context.Context, canvasID string
 	if row.DeletedAt != nil {
 		return CollaborationCanvasSummary{}, ErrNotFound
 	}
-	if !canManageCollaborationCanvas(row, m.NodeID()) {
+	if !m.canManageCanvas(row) {
 		return CollaborationCanvasSummary{}, ErrPeerNotTrusted
 	}
-	updates := map[string]any{"updated_at": time.Now().UTC(), "metadata_revision": gorm.Expr("metadata_revision + 1")}
+	updates := map[string]any{"metadata_author": m.NodeID(), "updated_at": time.Now().UTC(), "metadata_revision": gorm.Expr("metadata_revision + 1")}
 	if name != nil {
 		value := strings.TrimSpace(*name)
 		if !validCollaborationCanvasName(value) {
@@ -175,11 +187,11 @@ func (m *Manager) DeleteCollaborationCanvas(ctx context.Context, canvasID string
 	if row.DeletedAt != nil {
 		return ErrNotFound
 	}
-	if !canManageCollaborationCanvas(row, m.NodeID()) {
+	if !m.canManageCanvas(row) {
 		return ErrPeerNotTrusted
 	}
 	now := time.Now().UTC()
-	if err := m.db.WithContext(ctx).Model(&row).Updates(map[string]any{"deleted_at": &now, "updated_at": now, "metadata_revision": gorm.Expr("metadata_revision + 1")}).Error; err != nil {
+	if err := m.db.WithContext(ctx).Model(&row).Updates(map[string]any{"metadata_author": m.NodeID(), "deleted_at": &now, "updated_at": now, "metadata_revision": gorm.Expr("metadata_revision + 1")}).Error; err != nil {
 		return err
 	}
 	m.scheduleKnownCatalogSync()
@@ -197,6 +209,9 @@ func (m *Manager) CollaborationCanvasUpdates(ctx context.Context, canvasID, afte
 	}
 	if canvas.DeletedAt != nil {
 		return CollaborationCanvasUpdatePage{}, ErrNotFound
+	}
+	if canvas.RoomID != "" && !m.roomMember(canvas.RoomID, m.NodeID()) {
+		return CollaborationCanvasUpdatePage{}, ErrPeerNotTrusted
 	}
 	query := m.db.WithContext(ctx).Where("canvas_id = ?", canvasID)
 	if after != "" {
@@ -249,6 +264,9 @@ func (m *Manager) appendCollaborationCanvasUpdate(ctx context.Context, canvasID 
 	if canvas.DeletedAt != nil {
 		return false, ErrNotFound
 	}
+	if canvas.RoomID != "" && !m.roomMember(canvas.RoomID, m.NodeID()) {
+		return false, ErrPeerNotTrusted
+	}
 	row := collaborationUpdateRow(canvasID, update, originNodeID, time.Now().UTC())
 	result := m.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "canvas_id"}, {Name: "update_hash"}}, DoNothing: true,
@@ -280,7 +298,7 @@ func (m *Manager) collaborationCanvasMetadata(ctx context.Context) ([]collaborat
 	items := make([]collaborationCanvasMetadata, 0, len(rows))
 	for _, row := range rows {
 		items = append(items, collaborationCanvasMetadata{
-			ID: row.ID, Name: row.Name, CreatedByNodeID: row.CreatedByNodeID,
+			RoomID: row.RoomID, MetadataAuthor: row.MetadataAuthor, ID: row.ID, Name: row.Name, CreatedByNodeID: row.CreatedByNodeID,
 			CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, AssetCatalogID: row.AssetCatalogID, MetadataRevision: row.MetadataRevision, ArchivedAt: row.ArchivedAt, DeletedAt: row.DeletedAt,
 		})
 	}
@@ -288,6 +306,18 @@ func (m *Manager) collaborationCanvasMetadata(ctx context.Context) ([]collaborat
 }
 
 func (m *Manager) upsertCollaborationCanvasMetadata(ctx context.Context, item collaborationCanvasMetadata) error {
+	if item.RoomID != "" && (!m.roomMember(item.RoomID, m.NodeID()) || !validNodeID(item.MetadataAuthor)) {
+		return ErrPeerNotTrusted
+	}
+	if item.AssetCatalogID != "" {
+		var catalog model.LANShareCatalog
+		if err := m.db.WithContext(ctx).First(&catalog, "id = ?", item.AssetCatalogID).Error; err != nil {
+			return collaborationRecordError(err)
+		}
+		if catalog.RoomID != item.RoomID {
+			return ErrConflict
+		}
+	}
 	item.ID = strings.TrimSpace(item.ID)
 	item.Name = strings.TrimSpace(item.Name)
 	item.CreatedByNodeID = strings.ToLower(strings.TrimSpace(item.CreatedByNodeID))
@@ -298,18 +328,19 @@ func (m *Manager) upsertCollaborationCanvasMetadata(ctx context.Context, item co
 	err := m.db.WithContext(ctx).First(&existing, "id = ?", item.ID).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return m.db.WithContext(ctx).Create(&model.LANCollaborationCanvas{
-			ID: item.ID, Name: item.Name, CreatedByNodeID: item.CreatedByNodeID,
+			RoomID: item.RoomID, MetadataAuthor: item.MetadataAuthor, ID: item.ID, Name: item.Name, CreatedByNodeID: item.CreatedByNodeID,
 			CreatedAt: item.CreatedAt.UTC(), UpdatedAt: item.UpdatedAt.UTC(), AssetCatalogID: item.AssetCatalogID, MetadataRevision: item.MetadataRevision, ArchivedAt: item.ArchivedAt, DeletedAt: item.DeletedAt,
 		}).Error
 	}
 	if err != nil {
 		return err
 	}
-	if existing.CreatedByNodeID != item.CreatedByNodeID || !existing.CreatedAt.Equal(item.CreatedAt) {
+	if existing.RoomID != item.RoomID || existing.AssetCatalogID != item.AssetCatalogID || existing.CreatedByNodeID != item.CreatedByNodeID || !existing.CreatedAt.Equal(item.CreatedAt) {
 		return ErrConflict
 	}
 	updates := map[string]any{}
-	if item.MetadataRevision > existing.MetadataRevision && existing.DeletedAt == nil {
+	if (item.MetadataRevision > existing.MetadataRevision || (item.RoomID != "" && item.MetadataRevision == existing.MetadataRevision && item.MetadataAuthor > existing.MetadataAuthor) || item.DeletedAt != nil) && existing.DeletedAt == nil {
+		updates["metadata_author"] = item.MetadataAuthor
 		updates["name"] = item.Name
 		updates["asset_catalog_id"] = item.AssetCatalogID
 		updates["metadata_revision"] = item.MetadataRevision
@@ -328,7 +359,7 @@ func (m *Manager) upsertCollaborationCanvasMetadata(ctx context.Context, item co
 }
 
 func (m *Manager) upsertPeerCollaborationCanvasMetadata(ctx context.Context, peerID string, item collaborationCanvasMetadata) error {
-	if !validNodeID(peerID) || peerID != item.CreatedByNodeID {
+	if !validNodeID(peerID) || !m.canvasPeerAllowed(item, peerID) || (item.RoomID == "" && peerID != item.CreatedByNodeID) {
 		return ErrPeerNotTrusted
 	}
 	return m.upsertCollaborationCanvasMetadata(ctx, item)
@@ -342,7 +373,7 @@ func (m *Manager) handlePeerGetCollaborationCanvases(w http.ResponseWriter, r *h
 	}
 	owned := make([]collaborationCanvasMetadata, 0, len(items))
 	for _, item := range items {
-		if item.CreatedByNodeID == m.NodeID() {
+		if m.canvasPeerAllowed(item, requestPeerID(r)) && (item.RoomID != "" || item.CreatedByNodeID == m.NodeID()) {
 			owned = append(owned, item)
 		}
 	}
@@ -360,7 +391,7 @@ func (m *Manager) requireCollaborationPeerAccess(ctx context.Context, canvasID, 
 	if room.DeletedAt != nil {
 		return model.LANCollaborationCanvas{}, ErrNotFound
 	}
-	if room.CreatedByNodeID != m.NodeID() && room.CreatedByNodeID != peerID {
+	if (room.RoomID != "" && !m.roomAccess(room.RoomID, peerID)) || (room.RoomID == "" && (!m.pairedPeer(peerID) || (room.CreatedByNodeID != m.NodeID() && room.CreatedByNodeID != peerID))) {
 		return model.LANCollaborationCanvas{}, ErrPeerNotTrusted
 	}
 	return room, nil
@@ -440,7 +471,7 @@ func (m *Manager) handlePeerPostCollaborationCanvasUpdate(w http.ResponseWriter,
 	if !validNodeID(origin) {
 		origin = peerID
 	}
-	if room.CreatedByNodeID == m.NodeID() && origin != peerID {
+	if room.RoomID == "" && room.CreatedByNodeID == m.NodeID() && origin != peerID {
 		writePeerError(w, ErrPeerNotTrusted)
 		return
 	}
@@ -463,7 +494,7 @@ func (m *Manager) syncPeerCollaborationCanvases(ctx context.Context, client *htt
 		return err
 	}
 	for _, item := range remote.Canvases {
-		if item.CreatedByNodeID != peerID {
+		if !m.canvasPeerAllowed(item, peerID) || (item.RoomID == "" && item.CreatedByNodeID != peerID) {
 			continue
 		}
 		if err := m.upsertPeerCollaborationCanvasMetadata(ctx, peerID, item); err != nil {
@@ -475,7 +506,7 @@ func (m *Manager) syncPeerCollaborationCanvases(ctx context.Context, client *htt
 		return err
 	}
 	for _, item := range local {
-		if item.CreatedByNodeID != m.NodeID() {
+		if !m.canvasPeerAllowed(item, peerID) || (item.RoomID == "" && item.CreatedByNodeID != m.NodeID()) {
 			continue
 		}
 		var reply map[string]bool
@@ -487,13 +518,13 @@ func (m *Manager) syncPeerCollaborationCanvases(ctx context.Context, client *htt
 		if item.DeletedAt != nil {
 			continue
 		}
-		if item.CreatedByNodeID != m.NodeID() && item.CreatedByNodeID != peerID {
+		if !m.canvasPeerAllowed(item, peerID) {
 			continue
 		}
 		if err := m.pullPeerCollaborationCanvasUpdates(ctx, client, baseURL, peerID, item.ID); err != nil {
 			return err
 		}
-		if err := m.pushPeerCollaborationCanvasUpdates(ctx, client, baseURL, peerID, item.ID, item.CreatedByNodeID == m.NodeID()); err != nil {
+		if err := m.pushPeerCollaborationCanvasUpdates(ctx, client, baseURL, peerID, item.ID, item.RoomID != "" || item.CreatedByNodeID == m.NodeID()); err != nil {
 			return err
 		}
 	}
@@ -528,7 +559,7 @@ func (m *Manager) pullPeerCollaborationCanvasUpdates(ctx context.Context, client
 			if !validNodeID(origin) {
 				origin = peerID
 			}
-			if room.CreatedByNodeID == m.NodeID() && origin != peerID {
+			if room.RoomID == "" && room.CreatedByNodeID == m.NodeID() && origin != peerID {
 				continue
 			}
 			if _, err := m.appendCollaborationCanvasUpdate(ctx, canvasID, update, origin, false); err != nil {
@@ -600,7 +631,7 @@ func collaborationUpdateRow(canvasID string, update []byte, originNodeID string,
 
 func collaborationCanvasSummary(row model.LANCollaborationCanvas, updateCount int64) CollaborationCanvasSummary {
 	return CollaborationCanvasSummary{
-		ID: row.ID, Name: row.Name, CreatedByNodeID: row.CreatedByNodeID, AssetCatalogID: row.AssetCatalogID, Archived: row.ArchivedAt != nil,
+		ID: row.ID, RoomID: row.RoomID, Name: row.Name, CreatedByNodeID: row.CreatedByNodeID, AssetCatalogID: row.AssetCatalogID, Archived: row.ArchivedAt != nil,
 		UpdateCount: updateCount, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, ArchivedAt: row.ArchivedAt,
 	}
 }

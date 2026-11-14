@@ -7,6 +7,7 @@ import (
 	"infinite-canvas/backend/internal/buildinfo"
 	"infinite-canvas/backend/internal/environment"
 	"infinite-canvas/backend/internal/supporttrace"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -20,6 +21,7 @@ type Dependencies struct {
 	TraceSource       supporttrace.Source
 	AssistantEvidence AssistantEvidenceProvider
 	DataDir           string
+	ResourceDir       string
 	UpdateLogDir      string
 	Store             Store
 	Brand             Brand
@@ -32,6 +34,7 @@ type Service struct {
 	traceSource       supporttrace.Source
 	assistantEvidence AssistantEvidenceProvider
 	dataDir           string
+	resourceDir       string
 	updateLogDir      string
 	store             Store
 	brand             Brand
@@ -53,7 +56,11 @@ func New(deps Dependencies) *Service {
 	if brand == nil {
 		brand = staticBrand{name: defaultBrandName, slug: defaultBrandSlug}
 	}
-	return &Service{traceSource: deps.TraceSource, assistantEvidence: deps.AssistantEvidence, dataDir: deps.DataDir, store: deps.Store, brand: brand, config: deps.Config, now: now, newID: newID, updateLogDir: deps.UpdateLogDir}
+	resourceDir := deps.ResourceDir
+	if strings.TrimSpace(resourceDir) == "" && strings.TrimSpace(deps.DataDir) != "" {
+		resourceDir = filepath.Join(deps.DataDir, "resources")
+	}
+	return &Service{traceSource: deps.TraceSource, assistantEvidence: deps.AssistantEvidence, dataDir: deps.DataDir, resourceDir: resourceDir, store: deps.Store, brand: brand, config: deps.Config, now: now, newID: newID, updateLogDir: deps.UpdateLogDir}
 }
 
 func (s *Service) CheckEnvironment(ctx context.Context, repair bool) environment.Report {

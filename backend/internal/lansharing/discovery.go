@@ -16,7 +16,7 @@ import (
 const (
 	serviceType = "_beeftv-share._tcp"
 	domain      = "local."
-	protocol    = "1"
+	protocol    = "2"
 )
 
 type Peer struct {

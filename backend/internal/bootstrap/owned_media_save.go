@@ -42,7 +42,7 @@ func (r *Runtime) CopyOwnedResourceTo(resourceID, destPath string) error {
 	if err != nil {
 		return errors.New("没有可导出的本机文件")
 	}
-	src, err := openLocalOwnedResourceFile(resource, r.cfg.DataDir)
+	src, err := openLocalOwnedResourceFile(resource, r.cfg.ResourceDir)
 	if err != nil {
 		return err
 	}
@@ -64,11 +64,11 @@ func WriteOwnedArtifact(dest string, data []byte) error {
 	return writeOwnedFileAtomically(dest, bytes.NewReader(data), nil)
 }
 
-func openLocalOwnedResourceFile(resource *model.Resource, dataDir string) (*os.File, error) {
+func openLocalOwnedResourceFile(resource *model.Resource, resourceDir string) (*os.File, error) {
 	if resource == nil || resource.Provider != "local" || resource.Status != model.ResourceStatusReady {
 		return nil, errors.New("没有可导出的本机文件")
 	}
-	return localasset.NewFileStore(dataDir).Open(resource.ObjectKey)
+	return localasset.NewFileStoreAt(resourceDir).Open(resource.ObjectKey)
 }
 
 func writeOwnedFileAtomically(dest string, body io.Reader, src *os.File) (returnErr error) {

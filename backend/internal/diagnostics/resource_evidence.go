@@ -41,8 +41,8 @@ func (s *Service) collectResourceEvidence(userID string, tasks []model.Task, c *
 	// os.Root confines Stat even when an intermediate directory is a symlink.
 	// It neither reads media bytes nor creates the resource directory.
 	var root *os.Root
-	if strings.TrimSpace(s.dataDir) != "" {
-		root, _ = os.OpenRoot(filepath.Join(s.dataDir, "resources"))
+	if strings.TrimSpace(s.resourceDir) != "" {
+		root, _ = os.OpenRoot(s.resourceDir)
 	}
 	if root != nil {
 		defer root.Close()

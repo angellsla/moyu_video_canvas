@@ -15,7 +15,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const CurrentSchemaVersion int64 = 31
+const CurrentSchemaVersion int64 = 32
 
 type localSchemaMigration struct {
 	Version   int64 `gorm:"primaryKey;autoIncrement:false"`
@@ -68,6 +68,7 @@ func LocalModels() []any {
 		&model.Task{}, &model.CreationRun{}, &model.CreationSubmission{}, &model.TaskTextDelta{}, &model.TaskLog{}, &model.Result{},
 		&model.LANNodeIdentity{}, &model.LANTrustedPeer{}, &model.LANShareCatalog{}, &model.LANCatalogYjsUpdate{}, &model.LANCatalogResource{},
 		&model.LANCollaborationCanvas{}, &model.LANCollaborationCanvasYjsUpdate{},
+		&model.LANRoom{}, &model.LANRoomEvent{}, &model.LANRoomJoin{},
 	}
 }
 
@@ -160,6 +161,9 @@ func canonicalLocalMigrations() []localMigration {
 				}
 			}
 			return nil
+		}},
+		{version: 32, name: "lan-equal-member-rooms", apply: func(tx *gorm.DB) error {
+			return tx.AutoMigrate(&model.LANRoom{}, &model.LANRoomEvent{}, &model.LANRoomJoin{}, &model.LANShareCatalog{}, &model.LANCollaborationCanvas{})
 		}},
 	}
 }
@@ -517,11 +521,17 @@ func requireReconciledSchema(db *gorm.DB) error {
 		return err
 	}
 	models := []any{&model.ImageSubmission{}, &model.AgentOpRecord{}}
+	if version >= 32 {
+		models = append(models, &model.LANRoom{}, &model.LANRoomEvent{}, &model.LANRoomJoin{})
+	}
 	if version >= 29 {
-		models = append(models, &model.LANNodeIdentity{}, &model.LANTrustedPeer{}, &model.LANShareCatalog{}, &model.LANCatalogYjsUpdate{}, &model.LANCatalogResource{})
+		models = append(models, &model.LANNodeIdentity{}, &model.LANTrustedPeer{}, &legacyLANShareCatalog{}, &model.LANCatalogYjsUpdate{}, &model.LANCatalogResource{})
 	}
 	if version >= 30 {
-		models = append(models, &model.LANCollaborationCanvas{}, &model.LANCollaborationCanvasYjsUpdate{})
+		models = append(models, &legacyLANCollaborationCanvas{}, &model.LANCollaborationCanvasYjsUpdate{})
+	}
+	if version >= 32 {
+		models = append(models, &model.LANShareCatalog{}, &model.LANCollaborationCanvas{})
 	}
 	for _, value := range models {
 		stmt := &gorm.Statement{DB: db}
@@ -613,6 +623,30 @@ func requireReconciledSchema(db *gorm.DB) error {
 	}
 	return nil
 }
+
+type legacyLANShareCatalog struct {
+	ID              string `gorm:"primaryKey;size:36"`
+	Name            string `gorm:"size:120;not null"`
+	CreatedByNodeID string `gorm:"size:64;index"`
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+func (legacyLANShareCatalog) TableName() string { return "lan_share_catalogs" }
+
+type legacyLANCollaborationCanvas struct {
+	ID               string `gorm:"primaryKey;size:36"`
+	Name             string `gorm:"size:120;not null"`
+	CreatedByNodeID  string `gorm:"size:64;not null;index"`
+	AssetCatalogID   string `gorm:"size:36;index"`
+	MetadataRevision int64  `gorm:"not null;default:1"`
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	ArchivedAt       *time.Time
+	DeletedAt        *time.Time
+}
+
+func (legacyLANCollaborationCanvas) TableName() string { return "lan_collaboration_canvases" }
 
 func ReadSchemaStatus(db *gorm.DB) (SchemaStatus, error) {
 	status := SchemaStatus{Expected: CurrentSchemaVersion}

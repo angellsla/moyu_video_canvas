@@ -575,11 +575,11 @@ export async function makePortableSharedCanvasContent(catalogId: string, content
     return toPortableSharedCanvasContent(content, ({ localValue, source }) => hashes.get(source?.value || localValue));
 }
 
-export async function ensureSharedCanvasCatalog(name: string) {
+export async function ensureSharedCanvasCatalog(name: string, roomId?: string) {
     const response = await getLanSharingCatalogs();
-    const existing = response.catalogs.find((catalog) => catalog.name === name);
+    const existing = response.catalogs.find((catalog) => catalog.name === name && (catalog.roomId || "") === (roomId || ""));
     if (existing) return existing.id;
-    const created = await createLanSharingCatalog(name);
+    const created = await createLanSharingCatalog(name, roomId);
     return created.catalog.id;
 }
 

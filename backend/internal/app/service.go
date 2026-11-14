@@ -39,6 +39,7 @@ type Service struct {
 	canvasWorkflowLoop       bool
 	repo                     *repository.Repository
 	dataDir                  string
+	resourceDir              string
 	mode                     serviceMode
 	cancelMu                 sync.Mutex
 	storageMu                sync.Mutex
@@ -137,6 +138,12 @@ func NewLocal(repo *repository.Repository, dataDir string) *Service {
 	return newService(repo, dataDir, serviceOptions{mode: serviceModeLocal})
 }
 
+// NewLocalWithResourceDir keeps workspace metadata in dataDir while storing
+// durable local resource bytes under resourceDir.
+func NewLocalWithResourceDir(repo *repository.Repository, dataDir, resourceDir string) *Service {
+	return newService(repo, dataDir, serviceOptions{mode: serviceModeLocal, resourceDir: resourceDir})
+}
+
 // IsLocalMode is the canonical runtime-profile check for service-layer code.
 // Storage behavior is derived from the profile, but callers should use this
 // method instead of inferring the runtime mode from a storage detail.
@@ -155,11 +162,16 @@ const (
 )
 
 type serviceOptions struct {
-	mode serviceMode
+	mode        serviceMode
+	resourceDir string
 }
 
 func newService(repo *repository.Repository, dataDir string, options serviceOptions) *Service {
 	localResourceStorage := options.mode == serviceModeLocal
+	resourceDir := strings.TrimSpace(options.resourceDir)
+	if resourceDir == "" {
+		resourceDir = filepath.Join(dataDir, "resources")
+	}
 	coordinator := platform.NewLocalCoordinator()
 	var pluginRuntime *pluginRuntime
 	var pluginRuntimeErr error
@@ -168,7 +180,7 @@ func newService(repo *repository.Repository, dataDir string, options serviceOpti
 	} else {
 		pluginRuntime, pluginRuntimeErr = newPluginRuntimeWithReferences(dataDir, plugins.NewRepositoryStore(repo), newPluginReferences(dataDir, repo))
 	}
-	service := &Service{repo: repo, dataDir: dataDir, mode: options.mode, activeCancels: make(map[string]context.CancelFunc), coordinator: coordinator, localResourceStorage: localResourceStorage, pluginRuntime: pluginRuntime, pluginRuntimeErr: pluginRuntimeErr, workerID: newID(), routeCatalogTTL: 30 * time.Second, routeCatalogMaxStale: 5 * time.Minute}
+	service := &Service{repo: repo, dataDir: dataDir, resourceDir: resourceDir, mode: options.mode, activeCancels: make(map[string]context.CancelFunc), coordinator: coordinator, localResourceStorage: localResourceStorage, pluginRuntime: pluginRuntime, pluginRuntimeErr: pluginRuntimeErr, workerID: newID(), routeCatalogTTL: 30 * time.Second, routeCatalogMaxStale: 5 * time.Minute}
 	service.taskTerminalCoordinator = newTaskTerminalCoordinator(service)
 	service.taskRouteExecutor = newTaskRouteExecutor(service)
 	service.taskWorkerCoordinator = newTaskWorkerCoordinator(service)
@@ -181,7 +193,7 @@ func newService(repo *repository.Repository, dataDir string, options serviceOpti
 	service.assets = localasset.NewService(localasset.Dependencies{
 		DataDir:      dataDir,
 		Repository:   localasset.NewRepository(repo),
-		Blobs:        localasset.NewFileStore(dataDir),
+		Blobs:        localasset.NewFileStoreAt(resourceDir),
 		Quota:        resourceQuota{svc: service},
 		Lifecycle:    resourceLifecycle{svc: service},
 		LocalStorage: localResourceStorage,

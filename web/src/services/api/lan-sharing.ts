@@ -33,10 +33,25 @@ export type LanSharingTrustedPeer = {
 export type LanSharingCatalog = {
     id: string;
     name: string;
+    roomId?: string;
     updateCount?: number;
     createdAt?: string;
     updatedAt?: string;
 };
+
+export type LanRoomMember = { nodeId: string; publicKey: string; nickname: string };
+export type LanRoomProposal = { id: string; kind: string; target?: string; electorate: string[]; approvals: string[]; passed: boolean };
+export type LanRoom = { id: string; code: string; name: string; members: Record<string, LanRoomMember>; proposals: LanRoomProposal[]; dissolved: boolean; heads: string[]; joined: boolean };
+export type LanRoomLocation = { id: string; code: string; name: string; peerId: string; address: string; port: number };
+export type LanRoomJoin = { id: string; roomId: string; nodeId: string; nickname: string; address: string; port: number; status: string; outgoing: boolean; expiresAt: string; peerId?: string };
+
+export function getLanRooms(signal?: AbortSignal) { return http.get<{ rooms: LanRoom[] }>(`${BASE_PATH}/rooms`, { signal }); }
+export function createLanRoom(name: string) { return http.post<{ room: LanRoom }>(`${BASE_PATH}/rooms`, { name }); }
+export function discoverLanRooms(code: string, signal?: AbortSignal) { return http.get<{ rooms: LanRoomLocation[] }>(`${BASE_PATH}/rooms/discover`, { params: { code }, signal, timeout: 10_000 }); }
+export function requestLanRoomJoin(input: { roomId: string; peerId: string; address: string; port: number }) { return http.post<{ request: LanRoomJoin }>(`${BASE_PATH}/rooms/join`, input, { timeout: 15_000 }); }
+export function getLanRoomRequests(signal?: AbortSignal) { return http.get<{ requests: LanRoomJoin[] }>(`${BASE_PATH}/rooms/requests`, { signal }); }
+export function decideLanRoomJoin(requestId: string, approve: boolean) { return http.post<{ room: LanRoom }>(`${BASE_PATH}/rooms/requests/${encodeURIComponent(requestId)}`, { approve }); }
+export function actOnLanRoom(roomId: string, kind: "leave" | "remove" | "dissolve" | "vote", target = "") { return http.post<{ room: LanRoom }>(`${BASE_PATH}/rooms/${encodeURIComponent(roomId)}/actions`, { kind, target }); }
 
 export type LanSharingAsset = {
     entryId: string;
@@ -96,8 +111,8 @@ export function getLanSharingCatalogs() {
     return http.get<{ catalogs: LanSharingCatalog[] }>(`${BASE_PATH}/catalogs`);
 }
 
-export function createLanSharingCatalog(name: string) {
-    return http.post<{ catalog: LanSharingCatalog }>(`${BASE_PATH}/catalogs`, { name });
+export function createLanSharingCatalog(name: string, roomId?: string) {
+    return http.post<{ catalog: LanSharingCatalog }>(`${BASE_PATH}/catalogs`, { name, ...(roomId ? { roomId } : {}) });
 }
 
 export function listLocalSharingResources() {

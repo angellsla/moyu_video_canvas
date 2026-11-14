@@ -94,6 +94,10 @@ func openDesktopRuntime(ctx context.Context, dataDir string, loggers ...*runtime
 	if listenAddr == "" {
 		listenAddr = "127.0.0.1:0"
 	}
+	resourceDir, err := desktopstorage.ResolveAssetDir(dataDir)
+	if err != nil {
+		return nil, err
+	}
 	var runtimeLogger *runtimelog.Logger
 	if len(loggers) > 0 {
 		runtimeLogger = loggers[0]
@@ -101,6 +105,7 @@ func openDesktopRuntime(ctx context.Context, dataDir string, loggers ...*runtime
 	runtime, err := bootstrap.Open(ctx, bootstrap.Config{
 		Profile:         bootstrap.ProfileDesktop,
 		DataDir:         dataDir,
+		ResourceDir:     resourceDir,
 		DatabaseDriver:  "sqlite",
 		ListenAddr:      listenAddr,
 		LaunchToken:     strings.TrimSpace(os.Getenv("CANVAS_DESKTOP_LAUNCH_TOKEN")),

@@ -86,7 +86,7 @@ func (r *Runtime) WriteOwnedArchiveTo(ctx context.Context, entries []OwnedArchiv
 				if resource.Size > 1<<30 || total+resource.Size > 2<<30 {
 					return errors.New("导出文件超过大小限制")
 				}
-				source, err := openLocalOwnedResourceFile(resource, r.cfg.DataDir)
+				source, err := openLocalOwnedResourceFile(resource, r.cfg.ResourceDir)
 				if err != nil {
 					return err
 				}

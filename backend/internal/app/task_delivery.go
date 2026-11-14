@@ -539,7 +539,7 @@ func (s *Service) generationLocalArtifactPresent(resource *model.Resource) bool 
 	if s == nil || resource == nil || strings.TrimSpace(resource.ObjectKey) == "" {
 		return false
 	}
-	body, err := localasset.NewFileStore(s.dataDir).Open(resource.ObjectKey)
+	body, err := localasset.NewFileStoreAt(s.resourceDir).Open(resource.ObjectKey)
 	if err != nil {
 		return false
 	}

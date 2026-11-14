@@ -2,6 +2,7 @@ package lansharing
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/tls"
 	"errors"
 	"net"
@@ -24,11 +25,13 @@ func TestPeerServerListensOnAllPrivateLANInterfaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	clientTLS, err := identity.ClientTLSConfig(identity.ID())
+	clientTLS, err := identity.ClientTLSConfig(identity.ID(), Fingerprint(identity.PublicKey()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := NewPeerServer(identity, func(peerID string) bool { return peerID == identity.ID() }, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	server, err := NewPeerServer(identity, func(peerID string, key ed25519.PublicKey) bool {
+		return peerID == identity.ID() && key.Equal(identity.PublicKey())
+	}, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	if err != nil {
 		t.Fatal(err)
 	}

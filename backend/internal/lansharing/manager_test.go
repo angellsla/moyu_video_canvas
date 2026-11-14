@@ -125,15 +125,10 @@ func TestManualPairingTrustsBothPeersAndRepairsOneSidedTrust(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	probeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if peerID, peerPort, err := queryPairEndpoint(probeCtx, net.ParseIP(address), broadcastDiscoveryPort, recipientStatus.PairingCode); err != nil || peerID != recipient.NodeID() || peerPort != port {
-		t.Fatalf("recipient probe = %s:%d, err=%v", peerID, peerPort, err)
-	}
 	if _, err := initiator.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	request := PairRequest{Address: address, PairingCode: recipientStatus.PairingCode}
+	request := PairRequest{Address: address, Port: port, PairingCode: recipientStatus.PairingCode}
 	paired, err := initiator.PairPeer(context.Background(), request)
 	if err != nil {
 		t.Fatalf("manual pair: %v", err)
@@ -269,6 +264,32 @@ func TestDiscoveredPeerAggregatesInterfacesWithoutDuplicateAddresses(t *testing.
 	}
 }
 
+func TestDiscoveredPeerAddressAndPortCanChangeWithoutChangingIdentityID(t *testing.T) {
+	manager := &Manager{discovered: make(map[string]Peer), discoveredAt: make(map[string]time.Time)}
+	id := strings.Repeat("d", 64)
+	first := Peer{ID: id, Name: "Studio", Addresses: []string{"192.168.4.22"}, Port: 42317, Version: protocol}
+	changed := Peer{ID: id, Name: "Studio", Addresses: []string{"10.20.30.40"}, Port: 43102, Version: protocol}
+	if !manager.recordDiscoveredPeer(first, time.Now()) || !manager.recordDiscoveredPeer(changed, time.Now().Add(time.Second)) {
+		t.Fatal("a changed endpoint for the same identity ID should refresh discovery")
+	}
+	peers := manager.DiscoveredPeers()
+	if len(peers) != 1 || peers[0].ID != id || peers[0].Port != changed.Port || !slices.Equal(peers[0].Addresses, changed.Addresses) {
+		t.Fatalf("changed peer endpoint = %#v, want identity %s at %s:%d", peers, id, changed.Addresses[0], changed.Port)
+	}
+}
+
+func TestRecentlyDiscoveredAddressIsPreferredForStableIdentityID(t *testing.T) {
+	manager := &Manager{discovered: make(map[string]Peer), discoveredAt: make(map[string]time.Time)}
+	id := strings.Repeat("f", 64)
+	now := time.Now()
+	manager.recordDiscoveredPeer(Peer{ID: id, Addresses: []string{"192.168.4.22"}, Port: 42317, Version: protocol}, now)
+	manager.recordDiscoveredPeer(Peer{ID: id, Addresses: []string{"10.20.30.40"}, Port: 42317, Version: protocol}, now.Add(time.Second))
+	peers := manager.DiscoveredPeers()
+	if len(peers) != 1 || !slices.Equal(peers[0].Addresses, []string{"10.20.30.40", "192.168.4.22"}) {
+		t.Fatalf("discovered endpoint order = %#v, want freshest IP first with fallback retained", peers)
+	}
+}
+
 func TestDiscoveredPeerExpiresEachInterfaceAddressSeparately(t *testing.T) {
 	manager := &Manager{discovered: make(map[string]Peer), discoveredAt: make(map[string]time.Time)}
 	now := time.Now()
@@ -389,6 +410,31 @@ func TestScheduledSyncDoesNotPersistUnverifiedDiscoveredEndpoint(t *testing.T) {
 	}
 }
 
+func TestRememberPeerEndpointUpdatesTrustedRecordByIdentityID(t *testing.T) {
+	db, manager := newTestManager(t)
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerID := strings.Repeat("e", 64)
+	if _, err := manager.saveTrustedPeer(context.Background(), peerID, publicKey, "studio node", "192.168.1.20", 47000); err != nil {
+		t.Fatalf("save peer trust: %v", err)
+	}
+	if err := manager.rememberPeerEndpoint(context.Background(), peerID, "10.20.30.40", 48123); err != nil {
+		t.Fatalf("refresh trusted endpoint: %v", err)
+	}
+	var peer model.LANTrustedPeer
+	if err := db.First(&peer, "node_id = ?", peerID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if peer.Address != "10.20.30.40" || peer.Port != 48123 {
+		t.Fatalf("trusted endpoint = %s:%d, want 10.20.30.40:48123", peer.Address, peer.Port)
+	}
+	if err := manager.rememberPeerEndpoint(context.Background(), peerID, "8.8.8.8", 48123); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("public endpoint error = %v, want invalid", err)
+	}
+}
+
 func TestCatalogSyncJobTriesDistinctAddressesAfterFailure(t *testing.T) {
 	first := catalogSyncEndpoint{address: "192.168.44.2", port: 42100}
 	second := catalogSyncEndpoint{address: "10.70.60.25", port: 42100}
@@ -438,10 +484,19 @@ func newTestManager(t *testing.T) (*gorm.DB, *Manager) {
 		t.Fatal(err)
 	}
 	sqlDB.SetMaxOpenConns(1)
-	if err := db.AutoMigrate(&model.LANNodeIdentity{}, &model.LANTrustedPeer{}, &model.LANShareCatalog{}, &model.LANCatalogYjsUpdate{}, &model.LANCatalogResource{}, &model.LANCollaborationCanvas{}, &model.LANCollaborationCanvasYjsUpdate{}); err != nil {
+	if err := db.AutoMigrate(&model.LANNodeIdentity{}, &model.LANTrustedPeer{}, &model.LANShareCatalog{}, &model.LANCatalogYjsUpdate{}, &model.LANCatalogResource{}, &model.LANCollaborationCanvas{}, &model.LANCollaborationCanvasYjsUpdate{}, &model.LANRoom{}, &model.LANRoomEvent{}, &model.LANRoomJoin{}); err != nil {
 		t.Fatal(err)
 	}
-	manager, err := NewManager(t.TempDir(), db)
+	dataDir := t.TempDir()
+	identity, err := LoadIdentity(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity.nodeID, err = hardwareNodeID(kernel.NewID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewManager(dataDir, db, identity)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -57,10 +57,13 @@ func (m *Manager) DownloadPeerAsset(ctx context.Context, peerID, address string,
 	if m.db == nil || !m.isTrusted(peerID) {
 		return AssetMetadata{}, ErrPeerNotTrusted
 	}
+	if !m.catalogPeerAllowed(ctx, catalogID, peerID) {
+		return AssetMetadata{}, ErrPeerNotTrusted
+	}
 	if m.identity == nil {
 		return AssetMetadata{}, errors.New("LAN sharing identity is not initialized")
 	}
-	clientTLS, err := m.identity.ClientTLSConfig(peerID)
+	clientTLS, err := m.clientTLSConfig(peerID)
 	if err != nil {
 		return AssetMetadata{}, err
 	}

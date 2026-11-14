@@ -20,6 +20,7 @@ func (s *Service) playbackRuntime() *playback.Service {
 		runner := playbackRunner{svc: s}
 		s.playback = playback.New(playback.Deps{
 			DataDir:        s.dataDir,
+			ResourceDir:    s.resourceDir,
 			Store:          playbackStore{repo: s.repo},
 			Runner:         runner,
 			RuntimeContext: runner.Context,

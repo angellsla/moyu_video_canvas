@@ -5,9 +5,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"infinite-canvas/backend/internal/lansharing"
 )
 
 func TestMain(m *testing.M) {
+	// Runtime tests must never read or write the installed device identity.
+	loadLANIdentity = lansharing.LoadIdentity
 	if runtime.GOOS != "windows" {
 		os.Exit(m.Run())
 	}

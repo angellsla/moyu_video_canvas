@@ -3,10 +3,13 @@ package bootstrap
 import (
 	"time"
 
+	"infinite-canvas/backend/internal/lansharing"
 	"infinite-canvas/backend/internal/runtimelog"
 
 	"github.com/gin-gonic/gin"
 )
+
+var loadLANIdentity = lansharing.LoadDeviceIdentity
 
 type Profile string
 
@@ -22,6 +25,7 @@ const DefaultServerListenAddr = "127.0.0.1:8080"
 type Config struct {
 	Profile          Profile
 	DataDir          string
+	ResourceDir      string
 	DatabaseDriver   string
 	DatabaseURL      string
 	ListenAddr       string
