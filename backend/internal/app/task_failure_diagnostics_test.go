@@ -5,8 +5,49 @@ import (
 	"strings"
 	"testing"
 
+	"infinite-canvas/backend/internal/generation"
 	"infinite-canvas/backend/internal/model"
+	localtask "infinite-canvas/backend/internal/task"
 )
+
+func TestTerminalVideoReceiptPersistsAndUnlocksChangedGeneration(t *testing.T) {
+	for _, providerCode := range []string{"upstream_task_failed", ""} {
+		task := &model.Task{ID: "terminal-video", Type: "canvas_video", Status: model.TaskStatusRunning, ProviderRequestID: "original"}
+		repo := &taskTerminalRepositoryStub{task: task}
+		c := newTaskTerminalCoordinatorForTest(repo, &taskTerminalReplayStub{}, &taskTerminalLoggerStub{}, &taskTerminalOutputStub{})
+		cause := generation.NewRawPayloadError(`{"error":{"code":"` + providerCode + `","message":"OutputVideoSensitiveContentDetected.PolicyViolation: 生成结果未通过审核"}}`)
+		err := generation.ProviderTaskTerminalError{TaskID: "original", Status: "failed", Cause: cause}
+		if got := c.handleExecutionFailure(task, err, false, false); !errors.Is(got, err) {
+			t.Fatal(got)
+		}
+		if task.FailureDiagnostics == nil || task.FailureDiagnostics.ProviderStatus != "failed" || task.FailureDiagnostics.ProviderTaskID != "original" {
+			t.Fatalf("terminal receipt lost: %+v", task.FailureDiagnostics)
+		}
+		outcome := localtask.ComputeOutcome(*task, "", localtask.OutcomeFacts{})
+		if outcome.Phase != "failed" || outcome.Regenerate != "confirm" {
+			t.Fatalf("terminal task still blocked: %+v", outcome)
+		}
+	}
+}
+
+func TestStoredVideoModerationUsesDiagnosticEvidenceInBothViews(t *testing.T) {
+	task := model.Task{ID: "old-video", Type: "canvas_video", Status: model.TaskStatusFailed, ProviderRequestID: "original", Error: "生成失败。请查看详情后再决定是否重试。", FailureDiagnostics: &model.TaskFailureDiagnostics{
+		Source: "upstream_response", ProviderCode: "upstream_task_failed", ProviderTaskID: "original", Summary: "OutputVideoSensitiveContentDetected.PolicyViolation: 生成结果疑似涉及版权内容，未通过审核，本次未扣费。",
+	}}
+	before := task.Error
+	for _, code := range []string{taskForOutput(task).ErrorCode, taskSummaryForOutput(task).ErrorCode} {
+		if code != "moderation_output" {
+			t.Fatalf("persisted error remains generic: %s", code)
+		}
+	}
+	if !strings.Contains(taskForOutput(task).Error, "版权审核") || task.Error != before {
+		t.Fatal("projection changed history or lost cause")
+	}
+	task.FailureDiagnostics.Source = "local_result"
+	if taskForOutput(task).ErrorCode == "moderation_output" {
+		t.Fatal("local message was treated as upstream evidence")
+	}
+}
 
 func TestTaskFailureDiagnosticsPreserveLocalConstraint(t *testing.T) {
 	task := &model.Task{ID: "task-local", Stage: "校验参考图"}

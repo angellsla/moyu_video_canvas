@@ -95,6 +95,7 @@ export type GenerationFailureDiagnostics = {
     httpStatus?: number;
     requestId?: string;
     providerTaskId?: string;
+    providerStatus?: "failed" | "cancelled";
     param?: string;
     stage?: string;
     capturedAt?: string;
@@ -234,6 +235,7 @@ const PROVIDER_CODE_CATEGORIES: Record<string, GenerationErrorCategory> = {
     contentlengthexceeded: "context_too_long",
     url_error: "input_inaccessible",
     invalid_image_url: "input_inaccessible",
+    invalid_media_url: "input_inaccessible",
     file_too_large: "input_too_large",
     payload_too_large: "input_too_large",
     video_request_body_too_large: "input_too_large",
@@ -675,7 +677,7 @@ function specialize(classified: Classified, fields: ExtractedFields): Classified
     classified.requestId ||= sanitizeDebugId(fields.message.match(/\brequest\s*id:\s*([A-Za-z0-9_-]{6,127})\b/i)?.[1]);
     // Only broad wrappers may be refined by a more specific provider message.
     const genericCode =
-        ["", "unknown", "failed", "badrequest", "api_error", "upstream_error", "upstream_rejected", "invalid_request", "invalid_request_error", "invalid_parameter", "invalidparameter", "invalid_argument"].includes(normalizeCode(fields.code)) ||
+        ["", "unknown", "failed", "badrequest", "api_error", "upstream_error", "upstream_task_failed", "upstream_rejected", "invalid_request", "invalid_request_error", "invalid_parameter", "invalidparameter", "invalid_argument"].includes(normalizeCode(fields.code)) ||
         /^\d{3}$/.test(fields.code);
     if (genericCode && ["unknown", "invalid_params"].includes(classified.category)) {
         const refined = categoryFromProviderMessage(fields.message);

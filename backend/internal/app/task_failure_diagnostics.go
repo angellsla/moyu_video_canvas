@@ -70,5 +70,9 @@ func captureTaskFailureDiagnostics(task *model.Task, err error, source string) {
 	case errors.As(err, &appErr) && appErr.Status == 400 && source != "local_result":
 		d.Source, d.Summary = "local_validation", appErr.Message
 	}
+	var terminal generation.ProviderTaskTerminalError
+	if errors.As(err, &terminal) {
+		d.Source, d.ProviderStatus, d.ProviderTaskID = "upstream_response", terminal.Status, terminal.TaskID
+	}
 	task.FailureDiagnostics = generation.SanitizeTaskDiagnostics(d)
 }

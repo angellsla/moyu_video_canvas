@@ -56,6 +56,9 @@ func ComputeOutcome(task model.Task, resultState string, facts OutcomeFacts) Out
 	if d := task.FailureDiagnostics; d != nil && isInputRejectedCode(d.ProviderCode) {
 		return out("failed", "confirm", "input_rejected")
 	}
+	if ProviderReportedNoResult(task) {
+		return out("failed", regenerate, "no_result")
+	}
 	if task.RecoveryOutcome != nil {
 		switch *task.RecoveryOutcome {
 		case RecoveryUnrecoverable:
@@ -89,4 +92,17 @@ func provablyNotSubmitted(task model.Task, facts OutcomeFacts) bool {
 
 func isInputRejectedCode(code string) bool {
 	return code == "content_policy_violation" || code == "content_moderation" || strings.HasPrefix(code, "SAFETY.INPUT.")
+}
+
+// Use persisted receipt evidence, not a task ID alone or error prose. The
+// gateway code also covers older records saved before providerStatus existed.
+func ProviderReportedNoResult(task model.Task) bool {
+	d := task.FailureDiagnostics
+	if task.Status != model.TaskStatusFailed || d == nil || d.Source != "upstream_response" {
+		return false
+	}
+	if d.ProviderTaskID != "" && task.ProviderRequestID != "" && d.ProviderTaskID != task.ProviderRequestID {
+		return false
+	}
+	return d.ProviderStatus == "failed" || d.ProviderStatus == "cancelled" || d.ProviderCode == "upstream_task_failed"
 }

@@ -214,7 +214,7 @@ import gatewayCodes from "../../fixtures/generation-error-codes.json";
 
 describe("generation error classification", () => {
     test("all declared gateway error codes match the shared backend contract", () => {
-        expect(Object.keys(gatewayCodes)).toHaveLength(53);
+        expect(Object.keys(gatewayCodes)).toHaveLength(54);
         for (const [code, category] of Object.entries(gatewayCodes)) {
             expect(explainGenerationError({ code, message: "opaque provider message" }).category).toBe(category);
             expect(explainGenerationError({ status: 400, data: { error: { code } } }).category).toBe(category);

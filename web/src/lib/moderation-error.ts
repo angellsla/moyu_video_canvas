@@ -10,7 +10,9 @@ const mediaTypes = ["text", "image", "video", "audio"];
 // Ark's documented families encode direction, medium and cause separately.
 // PolicyViolation means copyright here; it is not a generic real-person rule.
 export function moderationErrorCopy(code: string, message: string): ModerationCopy | undefined {
-    const match = code.toLowerCase().match(/^(input|output)(text|image|video|audio)(?:sensitivecontentdetected|riskdetection)(?:\.(policyviolation|privacyinformation|deepfake))?$/);
+    const pattern = /^(input|output)(text|image|video|audio)(?:sensitivecontentdetected|riskdetection)(?:\.(policyviolation|privacyinformation|deepfake))?$/;
+    const match = code.toLowerCase().match(pattern)
+        || (message.includes(":") ? message.split(":", 1)[0].trim().toLowerCase().match(pattern) : null);
     let direction = match?.[1];
     let media = match?.[2];
     let cause = match?.[3] || "";

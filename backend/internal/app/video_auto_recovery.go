@@ -80,6 +80,12 @@ func (s *Service) recoverFailedVideo(ctx context.Context, candidate model.Task) 
 	if task.Status != model.TaskStatusFailed || !videoRecoveryNeedsPolling(*task) {
 		return nil
 	}
+	if localtask.ProviderReportedNoResult(*task) {
+		outcome := localtask.RecoveryNoResult
+		return s.withFailedVideoRecoveryLease(task, task.UserID, func(leased *model.Task) error {
+			return s.repo.FinishFailedVideoRecovery(*leased, &outcome, nil)
+		})
+	}
 	s.hydrateTaskProviderRequestID(task)
 	if strings.TrimSpace(task.ProviderRequestID) == "" {
 		s.recordMissingVideoReceiptOutcome(task, task.UserID)

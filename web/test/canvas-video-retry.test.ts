@@ -36,3 +36,25 @@ test("accepted or completed original videos are recovered instead of resubmitted
         expect(retryGenerationTask).not.toHaveBeenCalled();
     }
 });
+
+test("latest recovery state replaces stale canvas state before a failed video is retried", async () => {
+    const task = { id: "original", type: "canvas_video", status: "failed", providerRequestId: "accepted-video", outcome: { phase: "retrievable", regenerate: "blocked", reason: "provider_result_pending" } } as GenerationTask;
+    const onTaskUpdate = mock(() => {});
+    const retryGenerationTask = mock(async () => task);
+    const waitForGenerationTask = mock(async () => task);
+    await expect(retryStoredCanvasVideo(task.id, new AbortController().signal, onTaskUpdate, {
+        queryGenerationTask: async () => task, retryGenerationTask, waitForGenerationTask,
+    })).rejects.toThrow();
+    expect(onTaskUpdate).toHaveBeenCalledWith(task);
+    expect(retryGenerationTask).not.toHaveBeenCalled();
+    expect(waitForGenerationTask).not.toHaveBeenCalled();
+});
+
+test("confirmed terminal failure can be retried even with the original provider ID", async () => {
+    const task = { id: "original", type: "canvas_video", status: "failed", providerRequestId: "failed-video", outcome: { phase: "failed", regenerate: "confirm", reason: "no_result" } } as GenerationTask;
+    const retryGenerationTask = mock(async () => ({ ...task, status: "queued" as const }));
+    await retryStoredCanvasVideo(task.id, new AbortController().signal, () => {}, {
+        queryGenerationTask: async () => task, retryGenerationTask, waitForGenerationTask: async () => task,
+    });
+    expect(retryGenerationTask).toHaveBeenCalledTimes(1);
+});

@@ -149,17 +149,18 @@ type MidjourneyImagineParams struct {
 }
 
 type Media struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	Type       string `json:"type"`
-	DataURL    string `json:"dataUrl"`
-	URL        string `json:"url"`
-	StorageKey string `json:"storageKey"`
-	MimeType   string `json:"mimeType"`
-	Bytes      int64  `json:"bytes"`
-	Width      int    `json:"width"`
-	Height     int    `json:"height"`
-	DurationMs int64  `json:"durationMs"`
+	ID                    string    `json:"id"`
+	Name                  string    `json:"name"`
+	Type                  string    `json:"type"`
+	DataURL               string    `json:"dataUrl"`
+	URL                   string    `json:"url"`
+	StorageKey            string    `json:"storageKey"`
+	MimeType              string    `json:"mimeType"`
+	Bytes                 int64     `json:"bytes"`
+	Width                 int       `json:"width"`
+	Height                int       `json:"height"`
+	DurationMs            int64     `json:"durationMs"`
+	temporaryURLExpiresAt time.Time `json:"-"`
 }
 
 // WorkflowField 是云端工作流字段描述。实现位于 provider/workflow。
@@ -193,6 +194,17 @@ type PayloadError struct {
 	raw     string
 	message string
 }
+
+// ProviderTaskTerminalError is emitted only after a matching task receipt
+// explicitly reports failure/cancellation, never for a failed HTTP poll.
+type ProviderTaskTerminalError struct {
+	TaskID string
+	Status string
+	Cause  error
+}
+
+func (e ProviderTaskTerminalError) Error() string { return e.Cause.Error() }
+func (e ProviderTaskTerminalError) Unwrap() error { return e.Cause }
 
 func NewPayloadError(raw string, message string) PayloadError {
 	return PayloadError{raw: raw, message: message}

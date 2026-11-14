@@ -1401,7 +1401,9 @@ paths:
     get:
       tags: [tasks]
       summary: 任务详情
-      description: 生成结果正在取回时，data.delivery.outputs[] 给出每个输出的 downloadedBytes、totalBytes（未知为 -1）、bytesPerSecond 和 state（downloading / retrying / waiting）。waiting 表示服务端明确回复文件尚未就绪，retrying 表示下载出错后等待重试。字节数仅计入成功响应的文件内容。这是进程内存里的实时进度，不写数据库，取回结束即消失。
+      description: |
+        生成结果正在取回时，data.delivery.outputs[] 给出每个输出的 downloadedBytes、totalBytes（未知为 -1）、bytesPerSecond 和 state（downloading / retrying / waiting）。waiting 表示服务端明确回复文件尚未就绪，retrying 表示下载出错后等待重试。字节数仅计入成功响应的文件内容。这是进程内存里的实时进度，不写数据库，取回结束即消失。
+        data.failureDiagnostics.providerStatus 为可选的 failed / cancelled，表示已核对任务身份的上游终态回执。此类失败返回 outcome.phase=failed，停止自动取回；网络异常或状态未知仍保留原任务查询。providerStatus 不证明退款或未扣费。
       parameters:
         - in: path
           name: id

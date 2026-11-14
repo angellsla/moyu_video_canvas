@@ -1,5 +1,6 @@
 {
   "local_storage_failed": "local_storage",
+  "invalid_media_url": "input_inaccessible",
   "image_reference_upload_failed": "provider_unavailable",
   "reference_media_upload_failed": "provider_unavailable",
   "ContentSecurityDetectionError": "provider_unavailable",

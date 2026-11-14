@@ -60,6 +60,26 @@ func TestComputeOutcome(t *testing.T) {
 			t.ProviderRequestID = "original"
 			t.RecoveryOutcome = &noResult
 		}), "", OutcomeFacts{}, want("failed", "confirm", "no_result")},
+		{"视频网关明确失败不再等待取回", with(func(t *model.Task) {
+			t.Type = "canvas_video"
+			t.ProviderRequestID = "original"
+			t.FailureDiagnostics = &model.TaskFailureDiagnostics{Source: "upstream_response", ProviderCode: "upstream_task_failed"}
+		}), "", OutcomeFacts{}, want("failed", "confirm", "no_result")},
+		{"查询网络错误仍保留原任务", with(func(t *model.Task) {
+			t.Type = "canvas_video"
+			t.ProviderRequestID = "original"
+			t.FailureDiagnostics = &model.TaskFailureDiagnostics{Source: "upstream_http", ProviderCode: "upstream_error", HTTPStatus: 502}
+		}), "", OutcomeFacts{}, want("retrievable", "blocked", "provider_result_pending")},
+		{"明确失败的无错误码回执", with(func(t *model.Task) {
+			t.Type = "canvas_video"
+			t.ProviderRequestID = "original"
+			t.FailureDiagnostics = &model.TaskFailureDiagnostics{Source: "upstream_response", ProviderTaskID: "original", ProviderStatus: "failed"}
+		}), "", OutcomeFacts{}, want("failed", "confirm", "no_result")},
+		{"其他任务的失败回执不解除拦截", with(func(t *model.Task) {
+			t.Type = "canvas_video"
+			t.ProviderRequestID = "original"
+			t.FailureDiagnostics = &model.TaskFailureDiagnostics{Source: "upstream_response", ProviderTaskID: "other", ProviderStatus: "failed"}
+		}), "", OutcomeFacts{}, want("retrievable", "blocked", "provider_result_pending")},
 		{"视频过保或无法取回", with(func(t *model.Task) {
 			t.Type = "canvas_video"
 			t.ProviderRequestID = "original"

@@ -200,6 +200,7 @@ var providerCodeCategories = map[string]FailureCategory{
 	"contentlengthexceeded":                CategoryContextTooLong,
 	"url_error":                            CategoryInputInaccessible,
 	"invalid_image_url":                    CategoryInputInaccessible,
+	"invalid_media_url":                    CategoryInputInaccessible,
 	"invalid_image":                        CategoryInputInaccessible,
 	"download_error":                       CategoryInputInaccessible,
 	"file_too_large":                       CategoryInputTooLarge,
@@ -1080,7 +1081,7 @@ func specializeModeration(failure *Failure, fields extractedFields) {
 
 func genericProviderCode(code string) bool {
 	switch normalizeCode(code) {
-	case "", "unknown", "failed", "badrequest", "api_error", "upstream_error", "upstream_rejected", "invalid_request", "invalid_request_error", "invalid_parameter", "invalidparameter", "invalid_argument":
+	case "", "unknown", "failed", "badrequest", "api_error", "upstream_error", "upstream_task_failed", "upstream_rejected", "invalid_request", "invalid_request_error", "invalid_parameter", "invalidparameter", "invalid_argument":
 		return true
 	}
 	return regexp.MustCompile(`^\d{3}$`).MatchString(code)

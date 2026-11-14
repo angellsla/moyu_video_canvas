@@ -26,6 +26,7 @@ func taskSummariesForOutput(tasks []model.Task) []TaskSummary {
 
 func taskSummaryForOutput(task model.Task) TaskSummary {
 	task = correctPersistedVODParameterFailure(task)
+	task = correctPersistedVideoModeration(task)
 	errorCode := persistedFailureErrorCode(task.Error, task.Stage)
 	if errorCode == string(generation.CategoryUnknown) && !isContentModerationFailure(task.Error) {
 		errorCode = ""
@@ -227,6 +228,7 @@ func truncateRunes(value string, limit int) string {
 
 func taskForOutput(task model.Task) *model.Task {
 	task = correctPersistedVODParameterFailure(task)
+	task = correctPersistedVideoModeration(task)
 	task.FailureDiagnostics = generation.SanitizeTaskDiagnostics(task.FailureDiagnostics)
 	task.InputJSON = publicTaskInputJSON(task.InputJSON)
 	// 普通任务接口只暴露前台模型身份；渠道模型和供应线路属于管理员内部信息。
@@ -304,5 +306,20 @@ func correctPersistedVODParameterFailure(task model.Task) model.Task {
 	task.FailureDiagnostics = generation.SanitizeTaskDiagnostics(d)
 	task.FailureDiagnostics.Summary = failure.UserMessage()
 	task.FailureDiagnostics.Stage = task.Stage
+	return task
+}
+
+// Older gateway failures kept the raw code/message in diagnostics but stored a
+// generic public error. Reclassify that evidence without rewriting history.
+func correctPersistedVideoModeration(task model.Task) model.Task {
+	d := generation.SanitizeTaskDiagnostics(task.FailureDiagnostics)
+	if !localtask.ProviderReportedNoResult(task) || d == nil || (task.Type != "canvas_video" && !strings.HasPrefix(task.Type, "video_")) {
+		return task
+	}
+	raw, _ := json.Marshal(map[string]any{"error": map[string]string{"code": d.ProviderCode, "message": d.Summary}, "task_id": d.ProviderTaskID, "request_id": d.RequestID})
+	failure := generation.ClassifyText(string(raw))
+	if failure.IsModeration() {
+		task.Error = failure.UserMessage()
+	}
 	return task
 }

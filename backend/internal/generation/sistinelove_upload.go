@@ -21,10 +21,12 @@ import (
 	"time"
 
 	"infinite-canvas/backend/internal/outbound"
+	"infinite-canvas/backend/internal/protocol"
 	"infinite-canvas/backend/internal/providerpreset"
 )
 
 const sistineloveUploadWorkers = 3
+const sistineloveMediaURLLifetime = 25 * time.Minute
 
 func normalizeSistineloveVideoConfig(config Config) Config {
 	if providerpreset.IsSistineloveSeedance(config.BaseURL, config.Model) {
@@ -65,6 +67,12 @@ type sistineloveMediaClient struct {
 	sourceClient  *http.Client
 	queryInterval time.Duration
 	queryAttempts int
+}
+
+type sistineloveUploadJob struct {
+	kind  string
+	index int
+	media *Media
 }
 
 func newSistineloveMediaClient() sistineloveMediaClient {
@@ -150,18 +158,13 @@ func prepareSistineloveReferences(ctx context.Context, input *Input, client sist
 	prepared.ReferenceAudios = append([]Media(nil), input.ReferenceAudios...)
 	workCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	type job struct {
-		kind  string
-		index int
-		media *Media
-	}
-	var jobs []job
+	var jobs []sistineloveUploadJob
 	for _, group := range providerMediaGroups(&prepared) {
 		for i := range group.items {
-			jobs = append(jobs, job{group.kind, i, &group.items[i]})
+			jobs = append(jobs, sistineloveUploadJob{group.kind, i, &group.items[i]})
 		}
 	}
-	queue := make(chan job, len(jobs))
+	queue := make(chan sistineloveUploadJob, len(jobs))
 	for _, job := range jobs {
 		queue <- job
 	}
@@ -169,7 +172,7 @@ func prepareSistineloveReferences(ctx context.Context, input *Input, client sist
 	var wg sync.WaitGroup
 	var once sync.Once
 	var firstErr error
-	fail := func(job job, err error) {
+	fail := func(job sistineloveUploadJob, err error) {
 		once.Do(func() {
 			firstErr = RequestPreparationError{Cause: &ReferenceUploadError{Meta: ReferenceUploadMeta{Kind: job.kind, Index: job.index + 1, Stage: "put"}, Cause: err, Detail: err.Error()}}
 			cancel()
@@ -189,7 +192,7 @@ func prepareSistineloveReferences(ctx context.Context, input *Input, client sist
 					fail(job, err)
 					return
 				}
-				link, err := client.upload(workCtx, source, referenceMediaLabel(job.kind, job.index))
+				link, expiresAt, err := client.upload(workCtx, source, referenceMediaLabel(job.kind, job.index))
 				_ = source.Close()
 				if err != nil {
 					fail(job, err)
@@ -197,6 +200,7 @@ func prepareSistineloveReferences(ctx context.Context, input *Input, client sist
 				}
 				media.URL, media.DataURL, media.StorageKey = link, "", ""
 				media.Bytes, media.MimeType = source.size, source.mime
+				media.temporaryURLExpiresAt = expiresAt
 			}
 		}()
 	}
@@ -213,7 +217,38 @@ func prepareSistineloveReferences(ctx context.Context, input *Input, client sist
 
 func validSistineloveMediaLink(raw string) bool {
 	u, err := url.Parse(strings.TrimSpace(raw))
-	return err == nil && strings.EqualFold(u.Scheme, "https") && strings.EqualFold(u.Hostname(), "img.sistinelove.cn") && (u.Port() == "" || u.Port() == "443") && u.User == nil && u.Fragment == ""
+	return err == nil && strings.TrimSpace(raw) == raw && strings.EqualFold(u.Scheme, "https") && strings.EqualFold(u.Hostname(), "img.sistinelove.cn") && (u.Port() == "" || u.Port() == "443") && u.User == nil && u.Fragment == "" && u.Opaque == ""
+}
+
+func validateSistineloveCreateMedia(input Input, spec protocol.RequestSpec, now time.Time) error {
+	if !usesSistineloveUpload(input) || input.Mode != "video" {
+		return nil
+	}
+	body := ProtocolBodyObject(spec.Body)
+	for _, group := range providerMediaGroups(&input) {
+		key := map[string]string{"image": "images", "video": "videos", "audio": "audios"}[group.kind]
+		var submitted []any
+		if raw, exists := body[key]; exists {
+			var ok bool
+			submitted, ok = raw.([]any)
+			if !ok {
+				return fmt.Errorf("参考素材请求字段 %s 格式无效", key)
+			}
+		}
+		if len(submitted) != len(group.items) {
+			return fmt.Errorf("参考素材请求字段 %s 数量与已上传文件不一致", key)
+		}
+		for index, media := range group.items {
+			if !validSistineloveMediaLink(media.URL) || media.DataURL != "" || media.StorageKey != "" || media.temporaryURLExpiresAt.IsZero() || !now.Before(media.temporaryURLExpiresAt) {
+				return fmt.Errorf("%s 上传链接无效或已超过25分钟有效期，请重新提交", referenceMediaLabel(group.kind, index))
+			}
+			url, ok := submitted[index].(string)
+			if !ok || url != media.URL {
+				return fmt.Errorf("%s 请求链接与本次上传回执不一致", referenceMediaLabel(group.kind, index))
+			}
+		}
+	}
+	return nil
 }
 
 func (c sistineloveMediaClient) download(ctx context.Context, raw string, media Media, limit int64) (sistineloveMediaSource, error) {
@@ -278,10 +313,10 @@ func downloadSistineloveMedia(ctx context.Context, raw string, media Media, limi
 	return sistineloveMediaSource{ReadCloser: &temporaryMediaFile{File: file, path: file.Name()}, size: written, mime: mimeType, name: name}, nil
 }
 
-func (c sistineloveMediaClient) upload(ctx context.Context, source sistineloveMediaSource, label string) (string, error) {
+func (c sistineloveMediaClient) upload(ctx context.Context, source sistineloveMediaSource, label string) (string, time.Time, error) {
 	var random [32]byte
 	if _, err := rand.Read(random[:]); err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
 	id := hex.EncodeToString(random[:])
 	uploadCtx, reporter := beginReferenceProgress(ctx, label, source.size)
@@ -291,49 +326,50 @@ func (c sistineloveMediaClient) upload(ctx context.Context, source sistineloveMe
 	header.Set("Content-Disposition", mime.FormatMediaType("form-data", map[string]string{"name": "file", "filename": SafeProtocolFilename(source.name)}))
 	header.Set("Content-Type", defaultString(source.mime, "application/octet-stream"))
 	if _, err := writer.CreatePart(header); err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
 	prefixSize := envelope.Len()
 	if err := writer.Close(); err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
 	// Stream the owned file between the multipart prefix and suffix; memory does
 	// not grow with video size, and no goroutine is left waiting on an io.Pipe.
 	body := io.MultiReader(bytes.NewReader(envelope.Bytes()[:prefixSize]), referenceUploadReader(uploadCtx, io.LimitReader(source, source.size+1)), bytes.NewReader(envelope.Bytes()[prefixSize:]))
 	requestCtx := WithRequestKind(WithoutCallAccounting(uploadCtx), "reference_upload")
+	uploadedAt := time.Now()
 	if _, err := c.request(requestCtx, http.MethodPost, "/img_up", id, writer.FormDataContentType(), body, source.size+int64(envelope.Len())); err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
 	reporter.report("processing", source.size)
 	for attempt := 0; attempt < c.queryAttempts; attempt++ {
 		if attempt > 0 {
 			if err := SleepContext(ctx, c.queryInterval); err != nil {
-				return "", err
+				return "", time.Time{}, err
 			}
 		}
 		payload, err := c.request(requestCtx, http.MethodGet, "/q", id, "", nil, 0)
 		if err != nil {
-			return "", err
+			return "", time.Time{}, err
 		}
 		var receipt struct {
 			ID  string `json:"img_id"`
 			URL string `json:"img_url"`
 		}
 		if err := json.Unmarshal(payload, &receipt); err != nil {
-			return "", errors.New("素材链接查询返回了无效 JSON")
+			return "", time.Time{}, errors.New("素材链接查询返回了无效 JSON")
 		}
 		if receipt.ID != id {
-			return "", errors.New("素材链接查询返回的 img_id 与上传文件不一致")
+			return "", time.Time{}, errors.New("素材链接查询返回的 img_id 与上传文件不一致")
 		}
 		if receipt.URL == "" {
 			continue
 		}
 		if !validSistineloveMediaLink(receipt.URL) {
-			return "", errors.New("素材服务返回了无效 HTTPS 链接")
+			return "", time.Time{}, errors.New("素材服务返回了无效 HTTPS 链接")
 		}
-		return receipt.URL, nil
+		return receipt.URL, uploadedAt.Add(sistineloveMediaURLLifetime), nil
 	}
-	return "", errors.New("素材上传成功，但等待链接超时，请稍后重试")
+	return "", time.Time{}, errors.New("素材上传成功，但等待链接超时，请稍后重试")
 }
 
 func (c sistineloveMediaClient) request(ctx context.Context, method, path, id, contentType string, body io.Reader, length int64) ([]byte, error) {

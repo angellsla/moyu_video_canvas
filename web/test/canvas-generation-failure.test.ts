@@ -43,6 +43,20 @@ test("backend canvas revision 409 offers reload without treating it as a model f
 const task: GenerationTask = { id: "task-failure", type: "canvas_image", status: "failed", prompt: "draw", attempts: 1, createdAt: "2026-09-26T00:00:00Z", updatedAt: "2026-09-26T00:00:00Z", errorCode: "content_policy_violation", error: "opaque" };
 const image = (id: string, storageKey: string): CanvasNodeData => ({ id, type: CanvasNodeType.Image, title: id, position: { x: 0, y: 0 }, width: 100, height: 100, metadata: { content: `https://example.test/${id}.png`, storageKey } });
 
+test("terminal video failure replaces stale retrieval state while retaining the previous video", () => {
+    const node: CanvasNodeData = { ...image("video", "resource:previous"), type: CanvasNodeType.Video,
+        metadata: { taskId: task.id, content: "/previous.mp4", storageKey: "resource:previous", status: "error", taskOutcome: { phase: "retrievable", regenerate: "blocked", reason: "delivery_pending" } } };
+    const failed: GenerationTask = { ...task, type: "canvas_video", providerRequestId: "original", errorCode: "moderation_output", error: "生成视频未通过上游版权审核。请调整提示词后重新生成。", outcome: { phase: "failed", regenerate: "confirm", reason: "no_result" } };
+    const updated = canvasGenerationTaskNodes([node], node.id, failed)[0];
+    expect(updated.metadata?.content).toBe("/previous.mp4");
+    expect(updated.metadata?.storageKey).toBe("resource:previous");
+    expect(updated.metadata?.errorDetails).toContain("版权审核");
+    expect(isNodeRegenerateBlocked(updated.metadata)).toBe(false);
+    expect(canvasNodeHasPendingOutcomeResult(updated, [updated])).toBe(false);
+    expect(unchangedModeratedPrompt(updated.metadata, "draw")).toBe(true);
+    expect(unchangedModeratedPrompt(updated.metadata, "new prompt")).toBe(false);
+});
+
 test("complete image input rejection permits changed input while uncertain tasks stay locked", () => {
     const corrected: GenerationTask = { ...task, stage: "任务失败", errorCode: "moderation_input", error: "输入文本未通过内容安全审核。请调整提示词后重新生成。" };
     const stale = image("rejected-node", "");

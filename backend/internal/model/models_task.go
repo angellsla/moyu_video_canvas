@@ -80,6 +80,7 @@ type TaskFailureDiagnostics struct {
 	HTTPStatus      int                   `json:"httpStatus,omitempty"`
 	RequestID       string                `json:"requestId,omitempty"`
 	ProviderTaskID  string                `json:"providerTaskId,omitempty"`
+	ProviderStatus  string                `json:"providerStatus,omitempty"`
 	Param           string                `json:"param,omitempty"`
 	Stage           string                `json:"stage,omitempty"`
 	FailedOperation string                `json:"failedOperation,omitempty"`

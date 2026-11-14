@@ -85,7 +85,9 @@
 
 ## 兼容边界
 
-按提供的 Seedance 网关合同发送 JSON 字符串数组。桌面后端先把所有图片、视频和音频参考素材分别以 multipart file 上传到 https://img.sistinelove.cn/img_up，并用 img_id 请求 /q 获取 img_url，全部素材就绪后才提交生成。此上传行为仅适用于 video.sistinelove.cn 的 Seedance 线路或明确选择该专属协议的渠道。
+按提供的 Seedance 网关合同发送 JSON 字符串数组。桌面后端对图片、视频和音频参考素材复用同一套上传流程：分别以 multipart 的 `file` 字段 POST 到 `https://img.sistinelove.cn/img_up`，再携带同一 `img_id` GET `/q` 获取 `img_url`；图片、视频和音频各自进入请求体对应的 URL 数组。img_id 是独立的 64 字符随机值。
+
+上传服务返回的素材链接有效期为 25 分钟。后端从上传开始时间计算保守过期点，并在每次提交生成任务前逐项检查链接仍有效、链接主机为素材服务、请求体 URL 数组与本次上传回执按序完全一致；链接缺失、过期或错位时不会发出生成请求。重试生成会重新上传引用素材，不复用上一次的临时链接。此上传行为仅适用于 video.sistinelove.cn 的 Seedance 线路或明确选择该专属协议的渠道。
 
 <!-- BEEFTV_PLUGIN_MANIFEST_START -->
 ## Manifest 完整接口定义

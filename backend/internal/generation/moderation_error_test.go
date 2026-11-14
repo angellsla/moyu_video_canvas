@@ -71,3 +71,18 @@ func TestGenericWrapperRefinementPreservesAuthoritativeCodes(t *testing.T) {
 		}
 	}
 }
+
+func TestGatewayModerationCodeInMessage(t *testing.T) {
+	message := "OutputVideoSensitiveContentDetected.PolicyViolation: 生成结果疑似涉及版权内容，未通过审核，本次未扣费。"
+	for _, code := range []string{"upstream_task_failed", "upstream_error", "invalid_request_error"} {
+		raw, _ := json.Marshal(map[string]any{"error": map[string]string{"code": code, "message": message}, "task_id": "original"})
+		failure := generation.ClassifyText(string(raw))
+		if failure.Category != generation.CategoryModerationOutput || failure.Reason != "生成视频未通过上游版权审核" || !failure.BlocksAutomaticRetry() {
+			t.Fatalf("wrapped moderation lost: %+v", failure)
+		}
+	}
+	raw, _ := json.Marshal(map[string]any{"error": map[string]string{"code": "invalid_api_key", "message": message}})
+	if got := generation.ClassifyText(string(raw)); got.Category != generation.CategoryAuth {
+		t.Fatalf("authoritative code lost: %+v", got)
+	}
+}

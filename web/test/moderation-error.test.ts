@@ -2,6 +2,18 @@ import { expect, test } from "bun:test";
 import fixtures from "../../fixtures/moderation-errors.json";
 import { explainGenerationError, generationFailureMetadata, shouldBlockAutomaticRetry } from "../src/lib/generation-error";
 
+test("gateway error message retains the exact output moderation code", () => {
+    const message = "OutputVideoSensitiveContentDetected.PolicyViolation: 生成结果疑似涉及版权内容，未通过审核，本次未扣费。";
+    for (const code of ["upstream_task_failed", "upstream_error", "invalid_request_error"]) {
+        const failure = explainGenerationError({ error: { code, message } });
+        expect(failure.category).toBe("moderation_output");
+        expect(failure.reason).toBe("生成视频未通过上游版权审核");
+        expect(failure.blockAutomaticRetry).toBe(true);
+    }
+    expect(explainGenerationError({ error: { code: "invalid_api_key", message } }).category).toBe("auth");
+    expect(explainGenerationError({ error: { code: "upstream_error", message: "opaque" }, prompt: message }).category).toBe("unknown");
+});
+
 for (const fixture of fixtures) {
     test(`moderation raw, wrapped, message-only and persisted: ${fixture.code}`, () => {
         const requestId = "req_moderation_123";

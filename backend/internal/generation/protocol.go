@@ -80,6 +80,9 @@ func RunProtocolAdapterTaskWithPolicy(ctx context.Context, input Input, adapter 
 		if err != nil {
 			return nil, err
 		}
+		if err := validateSistineloveCreateMedia(input, spec, time.Now()); err != nil {
+			return nil, err
+		}
 		if result, handled, streamErr := tryStreamingDeclarativeTextCreate(ctx, input, adapter, request, spec, policy); handled {
 			return result, streamErr
 		}
@@ -118,7 +121,7 @@ func RunProtocolAdapterTaskWithPolicy(ctx context.Context, input Input, adapter 
 			taskID = extracted
 		}
 		if created.Status == protocol.StatusFailed || created.Status == protocol.StatusCancelled {
-			return nil, ProtocolResultError(created.Message, taskID, body)
+			return nil, ProviderTaskTerminalError{TaskID: taskID, Status: string(created.Status), Cause: ProtocolResultError(created.Message, taskID, body)}
 		}
 		if created.Status == protocol.StatusSucceeded {
 			return FinishProtocolAdapterResult(ctx, input, adapter, request, taskID, created.Result, policy)
@@ -153,7 +156,7 @@ func RunProtocolAdapterTaskWithPolicy(ctx context.Context, input Input, adapter 
 			result, err := FinishProtocolAdapterResult(ctx, input, adapter, request, taskID, state.Result, policy)
 			return VideoPollOutcome{Done: err == nil, Result: result}, err
 		case protocol.StatusFailed, protocol.StatusCancelled:
-			return VideoPollOutcome{}, ProtocolResultError(state.Message, taskID, body)
+			return VideoPollOutcome{}, ProviderTaskTerminalError{TaskID: taskID, Status: string(state.Status), Cause: ProtocolResultError(state.Message, taskID, body)}
 		}
 		return VideoPollOutcome{}, nil
 	})
@@ -206,7 +209,7 @@ func QueryProtocolAdapterVideoTask(ctx context.Context, input Input, adapter pro
 		result, err := FinishProtocolAdapterResult(ctx, input, adapter, request, taskID, state.Result, DefaultVideoPollPolicy())
 		return result, providerStatus, err
 	case protocol.StatusFailed, protocol.StatusCancelled:
-		return nil, providerStatus, ProtocolResultError(state.Message, taskID, body)
+		return nil, providerStatus, ProviderTaskTerminalError{TaskID: taskID, Status: providerStatus, Cause: ProtocolResultError(state.Message, taskID, body)}
 	case protocol.StatusPending, protocol.StatusProcessing:
 		return nil, providerStatus, nil
 	default:

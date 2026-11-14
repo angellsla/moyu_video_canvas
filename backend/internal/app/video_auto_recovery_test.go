@@ -12,9 +12,48 @@ import (
 	"testing"
 	"time"
 
+	"infinite-canvas/backend/internal/generation"
 	"infinite-canvas/backend/internal/model"
 	localtask "infinite-canvas/backend/internal/task"
 )
+
+func TestVideoRecoveryStopsForPersistedTerminalReceipt(t *testing.T) {
+	s, canvasID, _ := newAssistantTurnService(t)
+	t.Cleanup(func() { closeDB(t, s.repo.DB()) })
+	for _, oldRecord := range []bool{false, true} {
+		task := model.Task{ID: "terminal-new", UserID: "local", ProjectID: canvasID, Type: "canvas_video", Status: model.TaskStatusFailed, ProviderRequestID: "original", RouteRun: 1, CreatedAt: time.Now()}
+		captureTaskFailureDiagnostics(&task, generation.ProviderTaskTerminalError{TaskID: "original", Status: "failed", Cause: generation.NewRawPayloadError(`{"error":{"code":"upstream_task_failed","message":"OutputVideoSensitiveContentDetected.PolicyViolation: 生成结果未通过审核"}}`)}, "unknown")
+		if oldRecord {
+			task.ID = "terminal-old"
+			task.FailureDiagnostics.ProviderStatus = ""
+		}
+		// An invalid request configuration proves that no network recovery is attempted.
+		task.InputJSON = `{"mode":"video","config":{}}`
+		if err := s.repo.DB().Create(&task).Error; err != nil {
+			t.Fatal(err)
+		}
+		for range 5 {
+			projected, err := s.RecoverTask(context.Background(), "local", task.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if projected.Outcome == nil || projected.Outcome.Phase != "failed" || projected.Outcome.Regenerate != "confirm" || projected.RouteRun != 1 || projected.ProviderRequestID != "original" {
+				t.Fatalf("repeated recovery changed the task or kept it blocked: %+v", projected)
+			}
+		}
+		stored, err := s.repo.Task(task.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stored.RecoveryOutcome == nil || *stored.RecoveryOutcome != localtask.RecoveryNoResult || stored.NextPollAt != nil {
+			t.Fatalf("terminal recovery kept polling: %+v", stored)
+		}
+		projected, err := s.Task("local", task.ID)
+		if err != nil || projected.Outcome == nil || projected.Outcome.Phase != "failed" || projected.Outcome.Regenerate != "confirm" {
+			t.Fatalf("projection: %+v err=%v", projected, err)
+		}
+	}
+}
 
 func TestVideoAndUpscaleAutomaticRecoveryDownloadsAndBindsCanvas(t *testing.T) {
 	t.Setenv("CANVAS_ALLOWED_PRIVATE_UPSTREAM_HOSTS", "127.0.0.1")

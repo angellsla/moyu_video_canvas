@@ -5,6 +5,8 @@ description: 画布、任务中心和批量生成如何把上游失败变成可�
 
 # 生成失败归类
 
+Seedance 网关可能将原始审核码放在错误消息开头，例如 `upstream_task_failed` 携带 `OutputVideoSensitiveContentDetected.PolicyViolation: ...`。前后端识别这个完整前缀并显示输出版权审核失败，保留网关原代码供排查；不据错误文字推断退款。确认失败的任务停止自动取回，修改输入后可发起新生成。`invalid_media_url` 归为参考素材读取失败。
+
 生成失败要告诉使用者发生了什么、下一步做什么。不能把 HTTP 状态或原始 JSON 直接铺到画布上。
 
 错误处理参考 [OpenAI Python SDK](https://github.com/openai/openai-python/blob/main/src/openai/_exceptions.py) 对状态、错误码和请求编号的保留方式、[LiteLLM](https://docs.litellm.ai/docs/exception_mapping) 的供应商错误归类、[Vercel AI SDK](https://github.com/vercel/ai/blob/main/packages/provider/src/errors/api-call-error.ts) 对可重试性的独立表达，以及 Bufflow 对未确认提交和产物交付失败的区分。[TanStack Query](https://tanstack.com/query/latest/docs/framework/react/guides/mutations) 的查询与写入重试边界也适用：重新提交生成可能再次计费，不能照搬查询重试。

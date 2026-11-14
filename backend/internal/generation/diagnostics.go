@@ -89,6 +89,9 @@ func SanitizeTaskDiagnostics(input *model.TaskFailureDiagnostics) *model.TaskFai
 	}
 	d.RequestID = sanitizeDebugID(d.RequestID)
 	d.ProviderTaskID = sanitizeDebugID(d.ProviderTaskID)
+	if d.Source != "upstream_response" || (d.ProviderStatus != "failed" && d.ProviderStatus != "cancelled") {
+		d.ProviderStatus = ""
+	}
 	d.Param = sanitizeProviderCode(d.Param)
 	if d.HTTPStatus < 100 || d.HTTPStatus > 599 {
 		d.HTTPStatus = 0

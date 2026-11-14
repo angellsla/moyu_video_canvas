@@ -13,6 +13,13 @@ var moderationMessagePattern = regexp.MustCompile(`may contain sensitive informa
 // PolicyViolation means copyright, while PrivacyInformation concerns likeness.
 func moderationErrorCopy(code, message string) (Failure, bool) {
 	m := moderationCodePattern.FindStringSubmatch(strings.ToLower(code))
+	// Gateways may keep their own code and prefix the translated message with
+	// the original provider code. Only accept an exact leading code token.
+	if len(m) == 0 {
+		if prefix, _, ok := strings.Cut(strings.TrimSpace(message), ":"); ok {
+			m = moderationCodePattern.FindStringSubmatch(strings.ToLower(strings.TrimSpace(prefix)))
+		}
+	}
 	direction, media, cause := "", "", ""
 	if len(m) != 0 {
 		direction, media, cause = m[1], m[2], m[3]

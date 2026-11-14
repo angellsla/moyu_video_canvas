@@ -142,12 +142,11 @@ func (s *Service) queryFailedVideoTask(ctx context.Context, task *model.Task, cl
 	}
 	if err != nil {
 		if outcome := classifyFailedVideoQueryOutcome(*task, providerStatus, err); outcome != "" {
-			var next *time.Time
-			at := time.Now().Add(videoRecoveryPollBackoff(*task))
-			next = &at
-			_ = s.repo.FinishFailedVideoRecovery(*task, &outcome, next)
+			if saveErr := s.repo.FinishFailedVideoRecovery(*task, &outcome, nil); saveErr != nil {
+				return nil, errors.Join(err, saveErr)
+			}
 			task.RecoveryOutcome = &outcome
-			task.NextPollAt = next
+			task.NextPollAt = nil
 		}
 		_ = s.log(task.UserID, task.ID, "error", "人工查询上游视频任务失败", err.Error())
 		return nil, err
